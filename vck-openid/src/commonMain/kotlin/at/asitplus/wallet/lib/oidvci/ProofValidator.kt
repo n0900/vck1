@@ -19,6 +19,7 @@ import at.asitplus.wallet.lib.jws.VerifyJwsObject
 import at.asitplus.wallet.lib.jws.VerifyJwsObjectFun
 import at.asitplus.wallet.lib.jws.VerifyJwsSignatureWithKey
 import at.asitplus.wallet.lib.jws.VerifyJwsSignatureWithKeyFun
+import at.asitplus.wallet.lib.oauth2.SimpleAuthorizationService
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidNonce
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidProof
 import kotlin.time.Clock
@@ -40,7 +41,8 @@ class ProofValidator(
     /** Used to verify JWT proof signatures against keys attested by Key Attestations. */
     private val verifyJwsSignatureWithKey: VerifyJwsSignatureWithKeyFun = VerifyJwsSignatureWithKey(),
     /** Supported signing algorithms, which may be used from clients in proofs to request credentials. */
-    private val supportedAlgorithms: Collection<JwsAlgorithm.Signature> = listOf(JwsAlgorithm.Signature.ES256),
+    private val supportedAlgorithms: Collection<JwsAlgorithm.Signature> =
+        SimpleAuthorizationService.DEFAULT_WALLET_ATTESTATION_ALGORITHMS,
     /** Clock used to verify timestamps in proof elements in credential requests. */
     private val clock: Clock = Clock.System,
     /** Time leeway for verification of timestamps in proof elements in credential requests. */
