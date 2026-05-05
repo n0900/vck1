@@ -1,6 +1,6 @@
 # Changelog
 
-Release 6.0.0 (unreleased):
+Release 5.13.0 (unreleased):
  - OpenID for Verifiable Credential Issuance:
    - Update Wallet Instance Attestation and Key Attestation to [EUDI Wallet TS3](https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md) from 2026-03-15
    - `WalletService.KeyAttestationInput` now includes `credentialIssuer` and `preferredKeyStorageStatusPeriod`; JWT proof creation only loads/attaches a key attestation when issuer metadata requires it
