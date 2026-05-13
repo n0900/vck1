@@ -8,21 +8,20 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
-import kotlinx.serialization.json.JsonElement
 
 /**
  * Separation between the originally received json data and the decoded one allows for reserialization while preserving
  * integrity with vct#integrity and extends#integrity.
  */
-@Serializable(with = SdJwtTypeMetadataDocument.Serializer::class)
+@Serializable(with = SdJwtTypeMetadataDocument.DefinitionSerializer::class)
 data class SdJwtTypeMetadataDocument(
     val original: String,
     val definition: SdJwtTypeMetadataDefinition,
 ) {
-    class Serializer : KSerializer<SdJwtTypeMetadataDocument> {
+    object DefinitionSerializer : KSerializer<SdJwtTypeMetadataDocument> {
         override val descriptor: SerialDescriptor
             get() = PrimitiveSerialDescriptor(
-                serialName = Serializer::class.qualifiedName!!,
+                serialName = DefinitionSerializer::class.qualifiedName!!,
                 kind = PrimitiveKind.STRING
             )
 
