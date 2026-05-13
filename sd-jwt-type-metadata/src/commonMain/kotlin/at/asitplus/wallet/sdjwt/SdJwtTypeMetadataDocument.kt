@@ -17,7 +17,7 @@ import kotlinx.serialization.json.JsonElement
 @Serializable(with = SdJwtTypeMetadataDocument.Serializer::class)
 data class SdJwtTypeMetadataDocument(
     val original: String,
-    val definition: SdJwtTypeMetadataDefinition
+    val definition: SdJwtTypeMetadataDefinition,
 ) {
     class Serializer : KSerializer<SdJwtTypeMetadataDocument> {
         override val descriptor: SerialDescriptor
@@ -46,6 +46,7 @@ data class SdJwtTypeMetadataDocument(
 
             return SdJwtTypeMetadataDocument(
                 // TODO: is this good enough to retain the original character sequence for integrity checks?
+                //  - otherwise just use the constructor with original payload and delegate serialization
                 original = jsonElement.toString(),
                 definition = decoded
             )
