@@ -16,7 +16,7 @@ val SdJwtTypeMetadataDocumentTest by testSuite {
             Json.Default.decodeFromString(
                 SdJwtTypeMetadataDocument.serializer(),
                 it,
-            ).original.toString() shouldBe it
+            ).original shouldBe it
         }
     }
 }

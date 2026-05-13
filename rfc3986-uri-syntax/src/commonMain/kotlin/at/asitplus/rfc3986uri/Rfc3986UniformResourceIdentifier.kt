@@ -30,7 +30,9 @@ data class Rfc3986UniformResourceIdentifier(
     val string: String by lazy {
         listOfNotNull(
             "$schemeName:",
-            authority?.toString(true),
+            authority?.toString(true)?.let {
+                "//$it"
+            },
             path.toString(),
             query?.let { "?$it" },
             fragment?.let { "#$it" },

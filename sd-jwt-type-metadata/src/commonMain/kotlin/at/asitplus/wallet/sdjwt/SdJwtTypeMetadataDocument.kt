@@ -2,6 +2,8 @@ package at.asitplus.wallet.sdjwt
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
@@ -14,25 +16,21 @@ import kotlinx.serialization.json.JsonElement
  */
 @Serializable(with = SdJwtTypeMetadataDocument.Serializer::class)
 data class SdJwtTypeMetadataDocument(
-    // TODO: is this good enough to retain the original byte order for integrity checks?
-    val original: JsonElement,
+    val original: String,
     val definition: SdJwtTypeMetadataDefinition
 ) {
     class Serializer : KSerializer<SdJwtTypeMetadataDocument> {
         override val descriptor: SerialDescriptor
-            get() = SerialDescriptor(
-                original = JsonElement.Companion.serializer().descriptor,
+            get() = PrimitiveSerialDescriptor(
                 serialName = Serializer::class.qualifiedName!!,
+                kind = PrimitiveKind.STRING
             )
 
         override fun serialize(
             encoder: Encoder,
             value: SdJwtTypeMetadataDocument
         ) {
-            encoder.encodeSerializableValue(
-                JsonElement.Companion.serializer(),
-                value.original,
-            )
+            encoder.encodeString(value.original)
         }
 
         override fun deserialize(decoder: Decoder): SdJwtTypeMetadataDocument {
@@ -47,7 +45,8 @@ data class SdJwtTypeMetadataDocument(
             )
 
             return SdJwtTypeMetadataDocument(
-                original = jsonElement,
+                // TODO: is this good enough to retain the original character sequence for integrity checks?
+                original = jsonElement.toString(),
                 definition = decoded
             )
         }

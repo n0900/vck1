@@ -34,13 +34,13 @@ value class SdJwtTypeMetadataClaimInformationPath(
         )
     ) { currentList, segment ->
         when (segment) {
-            is SdJwtTypeMetadataClaimInformationPathNameSegment -> currentList.mapNotNull { (path, element) ->
+            is SdJwtTypeMetadataClaimInformationPathSegmentName -> currentList.mapNotNull { (path, element) ->
                 element.jsonObject[segment.string]?.let {
                     (path + segment.string) to it
                 }
             }
 
-            is SdJwtTypeMetadataClaimInformationPathIndexSegment -> currentList.mapNotNull { (path, element) ->
+            is SdJwtTypeMetadataClaimInformationPathSegmentIndex -> currentList.mapNotNull { (path, element) ->
                 element.jsonArray.getOrNull(segment.ulong.toInt())?.let {
                     (path + segment.ulong.toUInt()) to it
                 }
@@ -72,7 +72,7 @@ value class SdJwtTypeMetadataClaimInformationPath(
             startSegment,
             *segments.toTypedArray()
         ).map {
-            SdJwtTypeMetadataClaimInformationPathIndexSegment(it)
+            SdJwtTypeMetadataClaimInformationPathSegmentIndex(it)
         }
     )
 
@@ -84,7 +84,7 @@ value class SdJwtTypeMetadataClaimInformationPath(
             startSegment,
             *segments
         ).map {
-            SdJwtTypeMetadataClaimInformationPathNameSegment(it)
+            SdJwtTypeMetadataClaimInformationPathSegmentName(it)
         }
     )
 
@@ -96,9 +96,9 @@ value class SdJwtTypeMetadataClaimInformationPath(
         segment: SdJwtTypeMetadataClaimInformationPathSegment?
     ) = SdJwtTypeMetadataClaimInformationPath(this.segments + segment)
 
-    operator fun plus(index: ULong) = this + SdJwtTypeMetadataClaimInformationPathIndexSegment(index)
+    operator fun plus(index: ULong) = this + SdJwtTypeMetadataClaimInformationPathSegmentIndex(index)
 
-    operator fun plus(name: String) = this + SdJwtTypeMetadataClaimInformationPathNameSegment(name)
+    operator fun plus(name: String) = this + SdJwtTypeMetadataClaimInformationPathSegmentName(name)
 
     class SegmentSerializer : KSerializer<SdJwtTypeMetadataClaimInformationPathSegment?> {
         private val delegate = JsonPrimitive.Companion.serializer()
@@ -113,8 +113,8 @@ value class SdJwtTypeMetadataClaimInformationPath(
             value: SdJwtTypeMetadataClaimInformationPathSegment?
         ) {
             when (value) {
-                is SdJwtTypeMetadataClaimInformationPathIndexSegment -> encoder.encodeLong(value.ulong.toLong())
-                is SdJwtTypeMetadataClaimInformationPathNameSegment -> encoder.encodeString(value.string)
+                is SdJwtTypeMetadataClaimInformationPathSegmentIndex -> encoder.encodeLong(value.ulong.toLong())
+                is SdJwtTypeMetadataClaimInformationPathSegmentName -> encoder.encodeString(value.string)
                 null -> encoder.encodeNull()
             }
         }
@@ -129,9 +129,9 @@ value class SdJwtTypeMetadataClaimInformationPath(
             }
 
             return when {
-                jsonElement.isString -> SdJwtTypeMetadataClaimInformationPathNameSegment(jsonElement.content)
+                jsonElement.isString -> SdJwtTypeMetadataClaimInformationPathSegmentName(jsonElement.content)
                 jsonElement == JsonNull -> null
-                else -> SdJwtTypeMetadataClaimInformationPathIndexSegment(jsonElement.long.toULong())
+                else -> SdJwtTypeMetadataClaimInformationPathSegmentIndex(jsonElement.long.toULong())
             }
         }
     }
