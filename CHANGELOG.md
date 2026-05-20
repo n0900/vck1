@@ -6,7 +6,8 @@ Release 6.0.0 (unreleased):
  - VCK-OpenID:
    - Change: `RequestInfo.dpop`/`RequestInfo.clientAttestation`/`RequestInfo.clientAttestationDpop` now `JwsCompactTyped` instead of `String`
    - Change: `BuildDPoPHeader`/`BuildClientAttestationJwt`/`BuildClientAttestationPoPJwt` objects now return `JwsCompactTyped` instead of `String`
- - Change `JarRequestParameter.clientId` from optional to mandatory to enforce RFC9101 definition.
+ - OpenID for Verifiable Presentations:
+   - Change `JarRequestParameter.clientId` from optional to mandatory to enforce RFC9101 definition.
  - DC-API:
    - Add `OpenId4VpMultisigned` member to `DCAPIWalletRequest` sealed class
    - BREAKING: Refactor `DCAPIWalletRequest.request` from `RequestParameter` to `String` to more narrowly convey content (`JWS` or `JsonString`)
