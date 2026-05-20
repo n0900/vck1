@@ -6,8 +6,17 @@ Release 6.0.0 (unreleased):
  - VCK-OpenID:
    - Change: `RequestInfo.dpop`/`RequestInfo.clientAttestation`/`RequestInfo.clientAttestationDpop` now `JwsCompactTyped` instead of `String`
    - Change: `BuildDPoPHeader`/`BuildClientAttestationJwt`/`BuildClientAttestationPoPJwt` objects now return `JwsCompactTyped` instead of `String`
+ - Change `JarRequestParameter.clientId` from optional to mandatory to enforce RFC9101 definition.
+ - DC-API:
+   - Add `OpenId4VpMultisigned` member to `DCAPIWalletRequest` sealed class
+   - BREAKING: Refactor `DCAPIWalletRequest.request` from `RequestParameter` to `String` to more narrowly convey content (`JWS` or `JsonString`)
+   - BREAKING: Refactor `DigitalCredentialGetRequest.OpenId4Vp`
+     - Renamed `request` to `data` to reflect serial name
+     - Introduced `SignedDataElement` `MultiSignedDataElement` wrapper to keep serialization shape
  - JWS:
-   - BREAKING Change: Replace `JwsSigned` with `JwsCompact` and `JwsCompactTyped` in signing, verification, OpenID request/response, OAuth 2.0 DPoP/client attestation, OID4VCI proof, JWT VC, status list JWT, and SD-JWT APIs
+   - BREAKING: Replace `JwsSigned` with `JwsCompact` and `JwsCompactTyped` in signing, verification, OpenID request/response, OAuth 2.0 DPoP/client attestation, OID4VCI proof, JWT VC, status list JWT, and SD-JWT APIs
+   - BREAKING: Refactor `RequestParametersFromSigned.jwsSigned` from `JwsSigned` to `JWS` to allow multisigned use-cases
+      - Add `DcApiMultiSigned` member to `RequestParameterFrom` sealed class
    - Remove `JwsSignedSerializer`, use `JwsCompactStringSerializer`
  - SD-JWT:
    - Change: `String.toDigest()` annotated with @Throws
