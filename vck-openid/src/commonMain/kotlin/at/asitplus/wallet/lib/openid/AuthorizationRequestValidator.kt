@@ -6,7 +6,9 @@ import at.asitplus.iso.sha256
 import at.asitplus.openid.AuthenticationRequestParameters
 import at.asitplus.openid.OpenIdConstants
 import at.asitplus.openid.OpenIdConstants.ClientIdScheme
+import at.asitplus.openid.QesRequest
 import at.asitplus.openid.RequestParametersFrom
+import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.signum.indispensable.CryptoPublicKey
 import at.asitplus.signum.indispensable.io.Base64UrlStrict
 import at.asitplus.signum.indispensable.josef.JWS
@@ -54,6 +56,7 @@ internal class AuthorizationRequestValidator(
         } ?: throw InvalidRequest("response_type is null")
 
         request.parameters.validateTransactionData()
+        request.validateQesRequest()
 
         if (request.parameters.responseMode.isAnyDcApi()) {
             request.validateDcApi()
@@ -82,6 +85,55 @@ internal class AuthorizationRequestValidator(
                     throw InvalidRequest("wallet_nonce from request not known to us: $it")
                 }
             }
+        }
+    }
+
+    /**
+     * ETSI TS 119 432 Annex A.7.3, step 1. Recognize the QES profile from its transaction type or an X.509
+     * credential query, so omitting transaction data cannot bypass the profile's signed-request requirements.
+     * Signature and relying-party trust checks then follow the normal client identifier validation below.
+     */
+    private fun RequestParametersFrom<AuthenticationRequestParameters>.validateQesRequest() {
+        val transactions = parameters.transactionDataDecoded?.filterIsInstance<QesRequest>().orEmpty()
+        val signingQueryIds = parameters.dcqlQuery?.credentials?.filterIsInstance<DCQLX509CredentialQuery>()
+            ?.map { it.id.string }?.toSet().orEmpty()
+        if (transactions.isEmpty() && signingQueryIds.isEmpty()) return
+
+        val signedRequest = this as? RequestParametersFrom.RequestParametersSigned<AuthenticationRequestParameters>
+            ?: throw InvalidRequest("QES requires a signed OpenID4VP authorization request")
+        // The overload accepting parsed requests must validate the parameters covered by the signature.
+        val signedParameters = when (val jws = signedRequest.jwsTyped.jws) {
+            is JwsCompact -> jws.typed<AuthenticationRequestParameters, JwsCompact>().payload
+            is JwsGeneral -> jws.typed<AuthenticationRequestParameters, JwsGeneral>().payload
+            else -> throw InvalidRequest("Unsupported QES request object signature")
+        }
+        if (signedParameters != parameters)
+            throw InvalidRequest("QES parameters do not match the signed request object")
+        if (relyingPartyTrust == null)
+            throw InvalidRequest("QES requires configured relying-party trust")
+        when (parameters.clientIdSchemeExtracted) {
+            ClientIdScheme.PreRegistered, ClientIdScheme.X509SanDns, ClientIdScheme.X509Hash,
+            ClientIdScheme.VerifierAttestation -> Unit
+            else -> throw InvalidRequest("Unsupported QES client identifier scheme")
+        }
+        if (parameters.responseType != OpenIdConstants.VP_TOKEN)
+            throw InvalidRequest("QES requires response_type=vp_token")
+        if (parameters.responseMode !in setOf(
+                OpenIdConstants.ResponseMode.Fragment,
+                OpenIdConstants.ResponseMode.DirectPost,
+                OpenIdConstants.ResponseMode.DirectPostJwt,
+            )) throw InvalidRequest("Unsupported QES response_mode")
+        if (parameters.nonce.isNullOrEmpty() || parameters.state.isNullOrEmpty())
+            throw InvalidRequest("QES requires nonce and state")
+        if (parameters.dcqlQuery == null)
+            throw InvalidRequest("QES requires dcql_query")
+        if (transactions.isEmpty())
+            throw InvalidTransactionData("QES requires qesRequest transaction data")
+        transactions.forEach {
+            if (!signingQueryIds.containsAll(it.credentialIds))
+                throw InvalidTransactionData("qesRequest must reference X.509 credential queries")
+            if (it.signatureRequests.isEmpty())
+                throw InvalidTransactionData("qesRequest must contain signatureRequests")
         }
     }
 
