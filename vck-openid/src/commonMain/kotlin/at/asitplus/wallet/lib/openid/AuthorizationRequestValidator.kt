@@ -47,6 +47,7 @@ internal class AuthorizationRequestValidator(
     suspend fun validateAuthorizationRequest(
         request: RequestParametersFrom<AuthenticationRequestParameters>,
     ) {
+        //Since it's a nonce we should probably remove it at the very beginning?
         request.consumeWalletNonce()
 
         (request as? RequestParametersFrom.RequestParametersSigned<AuthenticationRequestParameters>)
