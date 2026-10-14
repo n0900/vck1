@@ -3,6 +3,10 @@ package at.asitplus.wallet.lib.openid
 import at.asitplus.openid.AuthenticationRequestParameters
 import at.asitplus.signum.indispensable.io.Base64UrlStrict
 import at.asitplus.testballoon.matrix.matrixSuite
+import at.asitplus.wallet.lib.agent.EphemeralKeyWithoutCert
+import at.asitplus.wallet.lib.jws.JwsContentTypeConstants
+import at.asitplus.wallet.lib.jws.JwsHeaderNone
+import at.asitplus.wallet.lib.jws.SignJwt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -87,14 +91,22 @@ val OpenId4VpHolderRequestParsingTest by matrixSuite {
             }]
         }""".encodeToByteArray().encodeToString(Base64UrlStrict)
         val input = """{
-            "response_type":"vp_token", "client_id":"https://verifier.example.org", "nonce":"qes-nonce",
+            "response_type":"vp_token", "client_id":"qes-verifier", "nonce":"qes-nonce", "state":"qes-state",
+            "response_mode":"direct_post", "response_uri":"https://verifier.example.org/response",
             "dcql_query":{"credentials":[{
                 "id":"certificate", "format":"https://cloudsignatureconsortium.org/2025/x509", "meta":{}
             }]},
             "transaction_data":["$encoded"]
         }"""
-        Json.decodeFromString<AuthenticationRequestParameters>(input)
-        OpenId4VpHolder().startAuthorizationResponsePreparation(input)
+        val parameters = Json.decodeFromString<AuthenticationRequestParameters>(input)
+        val signer = EphemeralKeyWithoutCert()
+        val signed = SignJwt<AuthenticationRequestParameters>(signer, JwsHeaderNone())(
+            JwsContentTypeConstants.OAUTH_AUTHZ_REQUEST, parameters, AuthenticationRequestParameters.serializer(),
+        ).getOrThrow().toString()
+        // Authenticate the RP first so this test reaches transaction reference validation.
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { clientId ->
+            if (clientId == parameters.clientId) setOf(signer.jsonWebKey) else null
+        })).startAuthorizationResponsePreparation(signed)
             .exceptionOrNull().shouldNotBeNull().shouldBeInstanceOf<OAuth2Exception.InvalidTransactionData>()
             .cause.shouldNotBeNull().message.shouldNotBeNull() shouldContain "credential_ids"
     }

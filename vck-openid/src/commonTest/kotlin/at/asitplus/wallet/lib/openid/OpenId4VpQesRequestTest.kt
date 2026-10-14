@@ -28,8 +28,10 @@ import at.asitplus.wallet.lib.jws.JwsHeaderCertOrJwk
 import at.asitplus.wallet.lib.jws.SignJwt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
+import at.asitplus.wallet.lib.utils.DefaultMapStore
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.http.*
 import io.matthewnelson.encoding.core.Decoder.Companion.decodeToByteArray
@@ -124,6 +126,99 @@ val OpenId4VpQesRequestTest by matrixSuite {
         )
         OpenId4VpHolder().startAuthorizationResponsePreparation(fixture.sign(request))
             .getOrThrow().request.parameters shouldBe request
+    }
+
+    "approval transactions keep general OpenID4VP validation instead of the Annex A signing profile" {
+        val fixture = QesPreparationFixture()
+        val approval = joseCompliantSerializer.decodeFromString<TransactionData>(
+            """{
+                "type":"https://cloudsignatureconsortium.org/2025/qes-approval",
+                "credential_ids":["pid"], "numSignatures":1, "signatureQualifier":"eu_eidas_qes",
+                "documentDigests":[{"label":"Contract","hash":"AQID"}],
+                "hashAlgorithmOID":"2.16.840.1.101.3.4.2.1"
+            }""",
+        )
+        val request = fixture.parameters.copy(
+            state = null,
+            dcqlQuery = joseCompliantSerializer.decodeFromString<DCQLQuery>(
+                """{"credentials":[{"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["https://example.test/pid"]}}]}""",
+            ),
+            transactionData = listOf(approval.toBase64UrlJsonString()),
+        )
+        OpenId4VpHolder().startAuthorizationResponsePreparation(joseCompliantSerializer.encodeToString(request))
+            .getOrThrow().request.parameters shouldBe request
+    }
+
+    listOf("empty credential_ids", "unknown query", "empty signatureRequests", "missing transaction_data", "state")
+        .asData(nameFn = { "authenticates the RP before rejecting $it" }) test { invalid ->
+        val fixture = QesPreparationFixture()
+        val request = fixture.parameters.copy(
+            state = if (invalid == "state") null else fixture.parameters.state,
+            transactionData = when (invalid) {
+                "empty credential_ids" -> listOf(fixture.transaction.copy(credentialIds = emptySet()).toBase64UrlJsonString())
+                "unknown query" -> listOf(fixture.transaction.copy(credentialIds = setOf("unknown")).toBase64UrlJsonString())
+                "empty signatureRequests" -> listOf(fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString())
+                "missing transaction_data" -> null
+                else -> fixture.parameters.transactionData
+            },
+        )
+        fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request, EphemeralKeyWithoutCert()))
+            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+            .message.shouldNotBeNull() shouldContain "request object not signed by a key registered for this client_id"
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { null }))
+            .startAuthorizationResponsePreparation(fixture.sign(request))
+            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+            .message.shouldNotBeNull() shouldContain "not a pre-registered relying party"
+        val authenticatedFailure = fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull()
+        if (invalid == "state") authenticatedFailure.shouldBeInstanceOf<InvalidRequest>()
+            .message.shouldNotBeNull() shouldContain "nonce and state"
+        else authenticatedFailure.shouldBeInstanceOf<InvalidTransactionData>()
+    }
+
+    listOf("valid", "bad signature", "bad transaction", "bad typ", "malformed transaction")
+        .asData(nameFn = { "consumes wallet_nonce at entry for a $it request and rejects its replay" }) test { outcome ->
+        val fixture = QesPreparationFixture()
+        val walletNonce = "single-attempt-nonce"
+        val nonceStore = DefaultMapStore<String, String>()
+        nonceStore.put(walletNonce, walletNonce)
+        var lookups = 0
+        val holder = OpenId4VpHolder(
+            walletNonceMapStore = nonceStore,
+            relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients {
+                lookups++
+                nonceStore.get(walletNonce) shouldBe null
+                setOf(fixture.signer.jsonWebKey)
+            }),
+        )
+        val parameters = fixture.parameters.copy(
+            walletNonce = walletNonce,
+            transactionData = when (outcome) {
+                "bad transaction" -> listOf(fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString())
+                "malformed transaction" -> listOf(JsonPrimitive("!"))
+                else -> fixture.parameters.transactionData
+            },
+        )
+        val request = RequestParametersFrom.Jws(
+            jws = JwsCompact(fixture.sign(
+                payload = parameters,
+                keyMaterial = if (outcome == "bad signature") EphemeralKeyWithoutCert() else fixture.signer,
+                typ = if (outcome == "bad typ") "JWT" else JwsContentTypeConstants.OAUTH_AUTHZ_REQUEST,
+            )),
+            parameters = parameters,
+        )
+        val result = holder.startAuthorizationResponsePreparation(request)
+        when (outcome) {
+            "valid" -> result.getOrThrow().request shouldBe request
+            "bad transaction", "malformed transaction" -> result.exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
+            else -> result.exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        }
+        nonceStore.get(walletNonce) shouldBe null
+        val expectedLookups = if (outcome == "bad typ" || outcome == "malformed transaction") 0 else 1
+        lookups shouldBe expectedLookups
+        holder.startAuthorizationResponsePreparation(request)
+            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+            .message.shouldNotBeNull() shouldContain "wallet_nonce from request not known to us"
+        lookups shouldBe expectedLookups
     }
 
     "rejects a request signed by a key other than the registered relying party's key" {

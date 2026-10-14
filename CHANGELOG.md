@@ -4,6 +4,8 @@ Release 9.0.0 (unreleased):
 - Implement ETSI TS 119 432 Annex A.7.3 step 1 in `OpenId4VpHolder.startAuthorizationResponsePreparation()`:
   require signed QES request objects and configured relying-party trust, validate X.509 DCQL references, and retain
   the original transaction data in the existing preparation state.
+- Make QES profile dispatch explicit and authenticate the RP before validating transaction semantics.
+  Consume `wallet_nonce` at the start of validation, including attempts rejected by subsequent checks.
 - Reject JAR invocations whose `client_id` differs from the signed request object's `client_id`.
 - Add request-side X.509 DCQL support for ETSI TS 119 432 Annex A.6: `CredentialFormatEnum.X509`,
   `DCQLX509CredentialQuery`, and `X509MetadataQuery` implementing `DCQLCredentialMetadataAndValidityConstraints`.
