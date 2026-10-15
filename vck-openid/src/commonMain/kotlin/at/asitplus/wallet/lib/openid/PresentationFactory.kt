@@ -43,39 +43,41 @@ internal class PresentationFactory(
     private val supportedCoseAlgorithms = supportedAlgorithms
         .mapNotNull { it.toCoseAlgorithm().getOrNull() }
 
-    /** Check the combined selection, then let Holder validate and present the ordinary credentials. */
-    internal fun prepareQesCredentialPresentation(
-        state: AuthorizationResponsePreparationState,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
-        signingQueryIds: Set<DCQLCredentialQueryIdentifier>,
-    ): CredentialPresentation.DCQLPresentation? {
-        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
-        if (state.credentialPresentationRequest != CredentialPresentationRequest.DCQLRequest(query))
-            throw InvalidTransactionData("QES preparation does not match the authorization request")
-        val selectedIds = submissions.keys + signingQueryIds
-        if (selectedIds.any { id -> query.credentials.none { it.id == id } })
-            throw InvalidTransactionData("Unknown selected DCQL query")
-        query.checkCredentialSetQueryRequirements(selectedIds).getOrElse {
-            throw InvalidTransactionData("QES selection does not satisfy DCQL credential sets", it)
+    companion object {
+        /** Check the combined selection, then let Holder validate and present the ordinary credentials. */
+        fun prepareQesCredentialPresentation(
+            state: AuthorizationResponsePreparationState,
+            submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
+            signingQueryIds: Set<DCQLCredentialQueryIdentifier>,
+        ): CredentialPresentation.DCQLPresentation? {
+            val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
+            if (state.credentialPresentationRequest != CredentialPresentationRequest.DCQLRequest(query))
+                throw InvalidTransactionData("QES preparation does not match the authorization request")
+            val selectedIds = submissions.keys + signingQueryIds
+            if (selectedIds.any { id -> query.credentials.none { it.id == id } })
+                throw InvalidTransactionData("Unknown selected DCQL query")
+            query.checkCredentialSetQueryRequirements(selectedIds).getOrElse {
+                throw InvalidTransactionData("QES selection does not satisfy DCQL credential sets", it)
+            }
+            val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
+            if (submissions.keys.any { id -> ordinary.none { it.id == id } })
+                throw InvalidTransactionData("X.509 requires a signing credential")
+            if (ordinary.isEmpty()) return null
+            return CredentialPresentation.DCQLPresentation(
+                presentationRequest = CredentialPresentationRequest.DCQLRequest(
+                    query.copy(
+                        credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
+                        // The original sets were satisfied by the combined ordinary and signing selection above.
+                        credentialSets = nonEmptyListOf(
+                            DCQLCredentialSetQuery(
+                                options = nonEmptyListOf(ordinary.map { it.id }), required = false,
+                            )
+                        ),
+                    )
+                ),
+                credentialQuerySubmissions = submissions,
+            )
         }
-        val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
-        if (submissions.keys.any { id -> ordinary.none { it.id == id } })
-            throw InvalidTransactionData("X.509 requires a signing credential")
-        if (ordinary.isEmpty()) return null
-        return CredentialPresentation.DCQLPresentation(
-            presentationRequest = CredentialPresentationRequest.DCQLRequest(
-                query.copy(
-                    credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
-                    // The original sets were satisfied by the combined ordinary and signing selection above.
-                    credentialSets = nonEmptyListOf(
-                        DCQLCredentialSetQuery(
-                            options = nonEmptyListOf(ordinary.map { it.id }), required = false,
-                        )
-                    ),
-                )
-            ),
-            credentialQuerySubmissions = submissions,
-        )
     }
 
     suspend fun createPresentation(

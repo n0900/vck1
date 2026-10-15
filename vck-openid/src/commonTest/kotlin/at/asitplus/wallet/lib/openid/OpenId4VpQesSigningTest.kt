@@ -35,6 +35,7 @@ import at.asitplus.wallet.lib.agent.*
 import at.asitplus.wallet.lib.data.CredentialPresentation
 import at.asitplus.wallet.lib.data.CredentialPresentationRequest
 import at.asitplus.wallet.lib.data.ConstantIndex
+import at.asitplus.wallet.lib.jws.SignJwtFun
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 import at.asitplus.wallet.lib.rqes.*
@@ -101,7 +102,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
         val choices = state.preparedQesDocuments.shouldNotBeNull().reversed().map {
             QesDocumentSigningChoice(it.transactionIndex, it.signatureRequestIndex, certificateId, signingAlgorithm)
         }
-        val result = holder.executeQesSigning(state, submissions, mapOf(certificateId to credential), choices).getOrThrow()
+        val result = QesSigningService(holder).execute(state, submissions, mapOf(certificateId to credential), choices).getOrThrow()
         result.signingResults.map { it.preparedDocument.let { it.transactionIndex to it.signatureRequestIndex } } shouldBe
                 listOf(1 to 0, 1 to 1, 2 to 0)
         fixture.calls.size shouldBe 3
@@ -116,7 +117,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
         val approval = joseCompliantSerializer.decodeFromString<TransactionData>(approvalJson)
         val state = fixture.prepare(transactions = listOf(fixture.preparation.transaction, approval), query = mixedQuery())
         val submissions = fixture.ordinarySubmissions(state, agent)
-        val result = fixture.holder(agent).executeQesSigning(
+        val result = QesSigningService(fixture.holder(agent)).execute(
             state, submissions, mapOf(certificateId to credential), listOf(defaultChoice),
         ).getOrThrow()
         val presentation = result.credentialPresentations.verifiablePresentations.getValue(pidId).single()
@@ -192,7 +193,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
         if (query != state.request.parameters.dcqlQuery) state = fixture.prepare(query = query)
         if (credential != credentials[certificateId] && scenario !in setOf("missing-credential", "extra-credential"))
             credentials = mapOf(certificateId to credential)
-        fixture.holder().executeQesSigning(state, emptyMap(), credentials, choices).exceptionOrNull()
+        QesSigningService(fixture.holder()).execute(state, emptyMap(), credentials, choices).exceptionOrNull()
             .shouldBeInstanceOf<InvalidTransactionData>()
         fixture.calls shouldBe emptyList()
     }
@@ -219,7 +220,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
             listOf(DCQLCredentialSetQuery(listOf(listOf(certificateId), listOf(pidId)).toNonEmptyList())).toNonEmptyList())
         val transaction = fixture.preparation.transaction.copy(credentialIds = setOf(certificateId.string, pidId.string))
         val state = fixture.prepare(query = query, transactions = listOf(transaction))
-        val result = fixture.holder().executeQesSigning(state, emptyMap(), mapOf(pidId to credential),
+        val result = QesSigningService(fixture.holder()).execute(state, emptyMap(), mapOf(pidId to credential),
             listOf(defaultChoice.copy(credentialQueryId = pidId))).getOrThrow()
         result.signingResults.single().credentialQueryId shouldBe pidId
     }
@@ -258,7 +259,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
     "executes prepared documents without a document preparation service" {
         val fixture = QesSigningFixture()
         val state = fixture.prepare()
-        OpenId4VpHolder().executeQesSigning(
+        QesSigningService(OpenId4VpHolder()).execute(
             state, emptyMap(), mapOf(certificateId to fixture.credential()), listOf(defaultChoice),
         ).getOrThrow().signingResults.size shouldBe 1
         fixture.calls.size shouldBe 1
@@ -284,12 +285,33 @@ val OpenId4VpQesSigningTest by matrixSuite {
                 return agent.createPresentation(request, credentialPresentation)
             }
         }
-        fixture.holder(holder).executeQesSigning(
+        QesSigningService(fixture.holder(holder)).execute(
             state, fixture.ordinarySubmissions(state, agent), mapOf(certificateId to fixture.credential()),
             listOf(defaultChoice, defaultChoice.copy(signatureRequestIndex = 1,
                 signingAlgorithm = SigningAlgorithm(X509SignatureAlgorithm.ES384.oid))),
         ).exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
         presentationCalls shouldBe 0
+        fixture.calls shouldBe emptyList()
+    }
+
+    listOf("user", "coroutine").asData(
+        nameFn = { "preserves $it cancellation during credential presentation before QTSP signing" },
+    ) test { scenario ->
+        val fixture = QesSigningFixture()
+        val cancellation = if (scenario == "user") UnlockFailed("cancelled") else CancellationException("cancelled")
+        val key = EphemeralKeyWithoutCert()
+        val agent = HolderAgent(
+            keyMaterial = key,
+            signKeyBinding = SignJwtFun { _, _, _ -> throw cancellation },
+        )
+        DummyCredentialDataProvider.issueAndStoreSdJwt(agent, key)
+        val state = fixture.prepare(query = mixedQuery())
+        val submissions = fixture.ordinarySubmissions(state, agent)
+        val credential = fixture.credential()
+        val service = QesSigningService(fixture.holder(agent))
+        val execute = suspend { service.execute(state, submissions, mapOf(certificateId to credential), listOf(defaultChoice)) }
+        if (scenario == "user") execute().exceptionOrNull() shouldBe cancellation
+        else shouldThrow<CancellationException> { execute() } shouldBe cancellation
         fixture.calls shouldBe emptyList()
     }
 
@@ -330,7 +352,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
                 keys = listOf(X509KeyInfo(rsaKey.oid.toString(), len = rsaKey.bits.number.toInt())),
             ))),
         ))
-        fixture.holder().executeQesSigning(state, emptyMap(), mapOf(certificateId to credential),
+        QesSigningService(fixture.holder()).execute(state, emptyMap(), mapOf(certificateId to credential),
             listOf(defaultChoice.copy(signingAlgorithm = null))).getOrThrow()
         val request = fixture.calls.single()
         request.signAlgoParams shouldBe algorithm.signAlgoParams
@@ -339,7 +361,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
         val changed = if (rsaAlgorithm is X509SignatureAlgorithm.RSAPSS)
             algorithm.copy(signAlgoParams = X509SignatureAlgorithm.PS384.parameters.single())
         else SigningAlgorithm(X509SignatureAlgorithm.RS384.oid, X509SignatureAlgorithm.RS384.parameters.single())
-        fixture.holder().executeQesSigning(state, emptyMap(), mapOf(certificateId to credential),
+        QesSigningService(fixture.holder()).execute(state, emptyMap(), mapOf(certificateId to credential),
             listOf(defaultChoice.copy(signingAlgorithm = changed))).exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
         fixture.calls shouldBe emptyList()
     }
@@ -360,7 +382,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
             "multiple" -> mapOf(pidId to original + original)
             else -> mapOf(DCQLCredentialQueryIdentifier("unknown") to original)
         }
-        fixture.holder(agent).executeQesSigning(state, submissions, mapOf(certificateId to credential),
+        QesSigningService(fixture.holder(agent)).execute(state, submissions, mapOf(certificateId to credential),
             listOf(defaultChoice)).exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
         fixture.calls shouldBe emptyList()
     }
@@ -377,7 +399,7 @@ val OpenId4VpQesSigningTest by matrixSuite {
             query = DCQLQuery(DCQLCredentialQueryList(query, query.copy(id = pidId))),
             transactions = listOf(transaction, transaction.copy(credentialIds = setOf(pidId.string))),
         )
-        val result = fixture.holder().executeQesSigning(
+        val result = QesSigningService(fixture.holder()).execute(
             preparationState = state,
             credentialSubmissions = emptyMap(),
             signingCredentials = mapOf(
@@ -479,7 +501,7 @@ private class QesSigningFixture(val response: SignHashResponseParameters = compl
     )).getOrThrow()
 
     suspend fun execute(state: AuthorizationResponsePreparationState, credential: QesSigningCredential): KmmResult<QesSigningResult> =
-        holder().executeQesSigning(state, emptyMap(), mapOf(certificateId to credential), state.preparedQesDocuments.shouldNotBeNull().map {
+        QesSigningService(holder()).execute(state, emptyMap(), mapOf(certificateId to credential), state.preparedQesDocuments.shouldNotBeNull().map {
             defaultChoice.copy(transactionIndex = it.transactionIndex, signatureRequestIndex = it.signatureRequestIndex)
         })
 

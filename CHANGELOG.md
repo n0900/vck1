@@ -8,9 +8,9 @@ Release 9.0.0 (unreleased):
     - Bind approvals to selected DCQL submissions; treat `credential_ids` as alternatives and reject invalid references with `invalid_transaction_data`
     - Add `PresentationRequestParameters.qesApprovalTransactionData` for independent approval selection
     - Add QES document retrieval, checksum verification, and DTBSR preparation to `OpenId4VpHolder`
-    - Add `OpenId4VpHolder.executeQesSigning` with CSC `signatures/signHash` callbacks for credential presentations and raw signatures (A.7.3 step 4)
-    - Configure QES preparation through `QesDocumentPreparationService`; preserve mixed transaction indices
+    - Add `QesSigningService.execute` with CSC `signatures/signHash` callbacks for credential presentations and raw signatures (A.7.3 step 4)
 - OpenID for Verifiable Presentations:
+    - Expose `OpenId4VpHolder.createPresentation` for protocol-bound presentation artifacts
     - Validate explicit DCQL credential and disclosure selections in the holder presentation pipeline
     - Consume `wallet_nonce` at the start of every validation attempt
     - Reject JAR `client_id` mismatches

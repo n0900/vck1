@@ -20,8 +20,6 @@ import at.asitplus.openid.SupportedAlgorithmsContainerIso
 import at.asitplus.openid.SupportedAlgorithmsContainerJwt
 import at.asitplus.openid.SupportedAlgorithmsContainerSdJwt
 import at.asitplus.openid.VpFormatsSupported
-import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
-import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.signum.indispensable.cosef.toCoseAlgorithm
 import at.asitplus.signum.indispensable.josef.JsonWebKey
@@ -40,6 +38,7 @@ import at.asitplus.wallet.lib.agent.EphemeralKeyWithoutCert
 import at.asitplus.wallet.lib.agent.Holder
 import at.asitplus.wallet.lib.agent.HolderAgent
 import at.asitplus.wallet.lib.agent.KeyMaterial
+import at.asitplus.wallet.lib.agent.PresentationResponseParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DCQLParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DeviceRetrievalParameters
 import at.asitplus.wallet.lib.agent.RandomSource
@@ -52,14 +51,7 @@ import at.asitplus.wallet.lib.jws.EncryptJweFun
 import at.asitplus.wallet.lib.oidvci.OAuth2Error
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
-import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
-import at.asitplus.wallet.lib.rqes.QesDocumentSigningChoice
-import at.asitplus.wallet.lib.rqes.QesSigningCredential
-import at.asitplus.wallet.lib.rqes.QesSigningResult
-import at.asitplus.wallet.lib.rqes.QesSigningRequestService
-import at.asitplus.wallet.lib.rqes.QesSigningValidator
-import at.asitplus.wallet.lib.rqes.QesSigningExecutor
 import at.asitplus.wallet.lib.utils.DefaultMapStore
 import at.asitplus.wallet.lib.utils.MapStore
 import com.benasher44.uuid.uuid4
@@ -153,9 +145,6 @@ class OpenId4VpHolder @JvmOverloads constructor(
     )
 
     private val presentationFactory = PresentationFactory(supportedAlgorithms)
-    private val qesSigningValidator = QesSigningValidator()
-    private val qesSigningRequestService = QesSigningRequestService()
-    private val qesSigningExecutor = QesSigningExecutor()
 
     val metadata: OAuth2AuthorizationServerMetadata by lazy {
         OAuth2AuthorizationServerMetadata(
@@ -279,7 +268,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
     /**
      * Parses the [AuthenticationRequestParameters] from [input] and loads remote objects (client metadata, keys, QES documents).
      * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
-     * or, for QES, [executeQesSigning].
+     * or, for QES, [QesSigningService.execute][at.asitplus.wallet.lib.rqes.QesSigningService.execute].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -294,7 +283,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
      * Authenticated QES requests additionally resolve documents, verify checksums, and prepare DTBSRs through
      * [qesDocumentPreparationService].
      * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
-     * or, for QES, [executeQesSigning].
+     * or, for QES, [QesSigningService.execute][at.asitplus.wallet.lib.rqes.QesSigningService.execute].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -322,43 +311,18 @@ class OpenId4VpHolder @JvmOverloads constructor(
     }
 
     /**
-     * ETSI TS 119 432 Annex A.7.3 step 4. Invoke only after the app obtains explicit consent, using the unmodified
-     * [preparationState] returned by [startAuthorizationResponsePreparation]. Selections must be explicit;
-     * an empty [credentialSubmissions] map is appropriate for an X.509-only request.
-     *
-     * Validates the complete DCQL selection, creates ordinary presentations, then signs each prepared document in
-     * request order. Does not retry: on failure, earlier remote signing operations may already have completed.
-     * Returns raw CSC signatures; container construction, embedding and response delivery (steps 5–6) are separate.
-     * Each selected credential's [QesSigningCredential.signHash] callback uses the CSC signatures/signHash contract;
-     * the application supplies its provider authorization and transport.
+     * Creates credential presentations bound to the prepared request's nonce, audience and transaction data.
+     * Invoke after the application approves the supplied selection. Returns presentation artifacts for further
+     * processing; use [finalizeAuthorizationResponse] to construct a complete OpenID response.
      */
-    suspend fun executeQesSigning(
+    suspend fun createPresentation(
         preparationState: AuthorizationResponsePreparationState,
-        credentialSubmissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
-        signingCredentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
-        signingChoices: List<QesDocumentSigningChoice>,
-    ): KmmResult<QesSigningResult> = catching {
-        val ordinaryPresentation = presentationFactory.prepareQesCredentialPresentation(
-            preparationState, credentialSubmissions, signingCredentials.keys,
-        )
-        val selections = qesSigningValidator.validate(
-            query = preparationState.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL"),
-            transactions = preparationState.request.parameters.transactionDataDecoded.orEmpty(),
-            documents = preparationState.preparedQesDocuments.orEmpty(),
-            credentials = signingCredentials,
-            choices = signingChoices,
-        )
-        val operations = qesSigningRequestService.create(selections)
-        val presentations = ordinaryPresentation?.let {
-            presentationFactory.createPresentation(preparationState, holder, it).getOrElse { error ->
-                error.getUserSignatureCancellationException()?.let { throw it }
-                if (error is OAuth2Exception.AccessDenied && error.cause is IllegalArgumentException)
-                    throw InvalidTransactionData("Invalid QES credential submission", error.cause)
-                throw error
-            } as DCQLParameters
-        } ?: DCQLParameters(emptyMap())
-        val results = qesSigningExecutor.execute(operations)
-        QesSigningResult(presentations, results)
+        credentialPresentation: CredentialPresentation,
+    ): KmmResult<PresentationResponseParameters> = catching {
+        presentationFactory.createPresentation(preparationState, holder, credentialPresentation).getOrElse { error ->
+            error.getUserSignatureCancellationException()?.let { throw it }
+            throw error
+        }
     }
 
     /**
@@ -394,13 +358,12 @@ class OpenId4VpHolder @JvmOverloads constructor(
     ): KmmResult<AuthenticationResponse> = catching {
         with(state) {
             if (request.parameters.transactionDataDecoded.orEmpty().any { it is QesRequest })
-                throw InvalidRequest("QES requires executeQesSigning and subsequent signature result processing")
+                throw InvalidRequest("QES requires QesSigningService and subsequent signature result processing")
             val presentation = credentialPresentation ?: credentialPresentationRequest?.toCredentialPresentation()
             val resultContainer = presentation?.let {
-                presentationFactory.createPresentation(
-                    state = state,
-                    holder = holder,
-                    credentialPresentation = presentation
+                createPresentation(
+                    preparationState = state,
+                    credentialPresentation = presentation,
                 ).getOrThrow()
             }
 
