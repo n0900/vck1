@@ -1,8 +1,6 @@
 package at.asitplus.wallet.lib.rqes
 
 import at.asitplus.catching
-import at.asitplus.csc.api.SignHashRequestParameters
-import at.asitplus.csc.api.SignHashResponseParameters
 import at.asitplus.csc.api.collection_entries.CertificateParameters
 import at.asitplus.csc.api.collection_entries.KeyParameters
 import at.asitplus.csc.bindings.QesSignatureRequest
@@ -24,33 +22,31 @@ import at.asitplus.signum.supreme.hash.digest
 import at.asitplus.wallet.lib.etsi.isValidAt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
-import at.asitplus.wallet.lib.openid.AuthorizationResponsePreparationState
-import kotlin.io.encoding.Base64
 
-/** Local correlation and routing state; only [request] crosses the CSC callback boundary. */
-internal data class QesSigningOperation(
+/** A document selection that satisfies the QES signing requirements. */
+internal data class ValidatedQesSigningSelection(
     val credentialQueryId: DCQLCredentialQueryIdentifier,
     val preparedDocument: PreparedQesDocument,
-    val request: SignHashRequestParameters,
-    val signHash: QesQtspSigner,
+    val credential: QesSigningCredential,
+    val signingAlgorithm: SigningAlgorithm,
 )
 
-/** Validates signing credentials and prepared documents before invoking CSC signHash. */
-class QesValidationService {
+/** Checks eligibility of the complete QES signing selection. */
+internal class QesSigningValidator {
 
-    internal fun validate(
-        state: AuthorizationResponsePreparationState,
+    fun validate(
+        query: DCQLQuery,
+        transactions: List<TransactionData>,
+        documents: List<PreparedQesDocument>,
         credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         choices: List<QesDocumentSigningChoice>,
-    ): List<QesSigningOperation> = catching {
-        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
+    ): List<ValidatedQesSigningSelection> = catching {
         validateSigningCredentials(query, credentials)
 
-        val transactions = state.request.parameters.transactionDataDecoded.orEmpty()
-        val selections = resolveDocumentChoices(transactions, state.preparedQesDocuments, choices)
+        val selections = resolveDocumentChoices(transactions, documents, choices)
         validateTransactionCredentials(choices, credentials.keys)
         selections.map { (document, choice) ->
-            createSigningOperation(
+            validateDocumentChoice(
                 transaction = transactions[document.transactionIndex] as QesRequest,
                 document = document,
                 credential = credentials.getValue(choice.credentialQueryId),
@@ -108,12 +104,12 @@ class QesValidationService {
         }
     }
 
-    private fun createSigningOperation(
+    private fun validateDocumentChoice(
         transaction: QesRequest,
         document: PreparedQesDocument,
         credential: QesSigningCredential,
         choice: QesDocumentSigningChoice,
-    ): QesSigningOperation {
+    ): ValidatedQesSigningSelection {
         val request = transaction.signatureRequests[choice.signatureRequestIndex]
         require(choice.credentialQueryId.string in transaction.credentialIds) {
             "Signing choice is outside the transaction's credential_ids"
@@ -126,17 +122,11 @@ class QesValidationService {
         }
         val algorithm = resolveSigningAlgorithm(request, choice, credential)
         validateAlgorithmCompatibility(algorithm, document, credential)
-        return QesSigningOperation(
+        return ValidatedQesSigningSelection(
             credentialQueryId = choice.credentialQueryId,
             preparedDocument = document,
-            request = SignHashRequestParameters(
-                credentialId = credential.credentialId,
-                hashes = listOf(document.preparation.dtbsr.value.copyOf()),
-                hashAlgorithmOid = document.preparation.dtbsr.algorithmOid,
-                signAlgoOid = algorithm.signAlgo,
-                signAlgoParams = algorithm.signAlgoParams,
-            ),
-            signHash = credential.signHash,
+            credential = credential,
+            signingAlgorithm = algorithm,
         )
     }
 
@@ -180,16 +170,6 @@ class QesValidationService {
                 is SignatureAlgorithm.RSA -> key is CryptoPublicKey.RSA
             }
         ) { "Signing algorithm is incompatible with the certificate key" }
-    }
-
-    fun validateResponse(response: SignHashResponseParameters) {
-        val signature = response.signatures?.singleOrNull()
-        val valid = catching {
-            require(response.responseId == null && !signature.isNullOrEmpty())
-            val decoded = Base64.decode(signature)
-            require(decoded.isNotEmpty() && Base64.encode(decoded) == signature)
-        }.isSuccess
-        if (!valid) throw InvalidRequest("QTSP must return exactly one completed, padded Base64 signature")
     }
 
     private fun validateCredential(query: DCQLX509CredentialQuery, credential: QesSigningCredential) {

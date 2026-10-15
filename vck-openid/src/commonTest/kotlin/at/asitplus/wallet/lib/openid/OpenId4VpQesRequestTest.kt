@@ -32,6 +32,7 @@ import at.asitplus.wallet.lib.jws.SignJwt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 import at.asitplus.wallet.lib.rqes.QesDocumentPreparation
+import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
 import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
 import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
 import at.asitplus.wallet.lib.utils.DefaultMapStore
@@ -64,8 +65,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
         var returnedJar = jar
         val holder = OpenId4VpHolder(
             relyingPartyTrust = fixture.trust,
-            qesDocumentRetriever = fixture.retriever,
-            qesDtbsrPreparer = fixture.preparer,
+            qesDocumentPreparationService = QesDocumentPreparationService(retriever = fixture.retriever, preparer = fixture.preparer),
             remoteResourceRetriever = {
                 fetched = it
                 if (it.url != QesPreparationFixture.REQUEST_URI) error("Unexpected fetch: ${it.url}")
@@ -103,8 +103,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val jar = fixture.sign(request, signer)
         OpenId4VpHolder(
             relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(ca.certificate) }),
-            qesDocumentRetriever = fixture.retriever,
-            qesDtbsrPreparer = fixture.preparer,
+            qesDocumentPreparationService = QesDocumentPreparationService(retriever = fixture.retriever, preparer = fixture.preparer),
         ).startAuthorizationResponsePreparation(jar).getOrThrow().request.parameters shouldBe request
         OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(TestCertificateAuthority().certificate) })).startAuthorizationResponsePreparation(
                 jar
@@ -240,8 +239,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
         var lookups = 0
         val holder = OpenId4VpHolder(
             walletNonceMapStore = nonceStore,
-            qesDocumentRetriever = fixture.retriever,
-            qesDtbsrPreparer = fixture.preparer,
+            qesDocumentPreparationService = QesDocumentPreparationService(retriever = fixture.retriever, preparer = fixture.preparer),
             relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients {
                 lookups++
                 nonceStore.get(walletNonce) shouldBe null
@@ -313,8 +311,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val json = joseCompliantSerializer.encodeToString(fixture.parameters)
         val holder = OpenId4VpHolder(
             relyingPartyTrust = fixture.trust,
-            qesDocumentRetriever = fixture.retriever,
-            qesDtbsrPreparer = fixture.preparer,
+            qesDocumentPreparationService = QesDocumentPreparationService(retriever = fixture.retriever, preparer = fixture.preparer),
             remoteResourceRetriever = { if (invalid == "plain request_uri") json else null },
         )
         val input = when (invalid) {
@@ -417,8 +414,7 @@ internal class QesPreparationFixture {
     }
     val holder = OpenId4VpHolder(
         relyingPartyTrust = trust,
-        qesDocumentRetriever = retriever,
-        qesDtbsrPreparer = preparer,
+        qesDocumentPreparationService = QesDocumentPreparationService(retriever = retriever, preparer = preparer),
     )
     val transaction = QesRequest(
         credentialIds = setOf("certificate"),
