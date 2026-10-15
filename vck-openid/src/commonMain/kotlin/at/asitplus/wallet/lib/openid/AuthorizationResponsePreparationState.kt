@@ -28,7 +28,7 @@ data class AuthorizationResponsePreparationState @JvmOverloads constructor(
     /** Audience of the presentation to create */
     val audience: String,
     /** QES documents prepared for consent and signing, associated with the original signed request by index. */
-    val preparedQesDocuments: List<PreparedQesDocument> = emptyList(),
+    val preparedQesDocuments: List<PreparedQesDocument>? = null,
 ) {
     val dcApiCallingOrigin: String?
         get() = (request as? RequestParametersFrom.DcApiRequest)?.callingOrigin

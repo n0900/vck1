@@ -8,7 +8,6 @@ import at.asitplus.csc.datamodel.documents.SignatureRequestContent
 import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
 import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.QesRequest
-import at.asitplus.openid.TransactionData
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
 import at.asitplus.openid.dcql.DCQLCredentialQueryList
 import at.asitplus.openid.dcql.DCQLCredentialSetQuery
@@ -62,9 +61,9 @@ class QesDocumentPreparationService(
         )
     }
 
-    suspend fun prepare(transactions: List<TransactionData>): List<PreparedQesDocument> = buildList {
+    suspend fun prepare(transactions: List<QesRequest>): List<PreparedQesDocument> = buildList {
         transactions.forEachIndexed { transactionIndex, transaction ->
-            if (transaction is QesRequest) addAll(prepareTransaction(transaction, transactionIndex))
+            addAll(prepareTransaction(transaction, transactionIndex))
         }
     }
 

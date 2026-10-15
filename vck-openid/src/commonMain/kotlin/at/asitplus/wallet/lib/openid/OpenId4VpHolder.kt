@@ -114,8 +114,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
     private val supportedJweEncryptionAlgorithms: Set<JweEncryption> = JweEncryption.entries.toSet(),
     /** Set to reject a plain request object we have fetched with POST (when RP supports that) */
     private val requireEncryptedRequests: Boolean = false,
-    private val qesDocumentPreparationService: QesDocumentPreparationService,
-    private val qesValidationService: QesValidationService
+    private val qesDocumentPreparationService: QesDocumentPreparationService? = null,
+    private val qesValidationService: QesValidationService? = null
 ) {
 
     init {
@@ -288,7 +288,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
     /**
      * Validates the [AuthenticationRequestParameters] from [params] and loads remote objects (client metadata, keys).
      * Authenticated QES requests additionally resolve documents, verify checksums, and prepare DTBSRs through
-     * [qesDocumentRetriever] and [qesDtbsrPreparer].
+     * [qesDocumentPreparationService].
      * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
      * or, for QES, [executeQesSigning].
      *
@@ -298,8 +298,12 @@ class OpenId4VpHolder @JvmOverloads constructor(
         params: RequestParametersFrom<AuthenticationRequestParameters>,
     ): KmmResult<AuthorizationResponsePreparationState> = catching {
         authorizationRequestValidator.validateAuthorizationRequest(params)
-        val preparedQesDocuments = qesDocumentPreparationService
-            .prepare(params.parameters.transactionDataDecoded.orEmpty())
+        val preparedQesDocuments = params.parameters.transactionDataDecoded.orEmpty().filterIsInstance<QesRequest>().let {
+            if (it.isNotEmpty()) {
+                require(qesDocumentPreparationService != null) { "QesDocumentPreparationService not configured" }
+                qesDocumentPreparationService.prepare(it)
+            } else null
+        }
         val loadedKeys = (params.parameters.clientMetadata?.loadJsonWebKeySet()?.keys
             ?: lookupJsonWebKeysForClient(JsonWebKeyLookupInput(params.parameters.clientId))?.keys)
         val jsonWebKeys = loadedKeys?.combine(params.extractLeafCertKey())
@@ -331,6 +335,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
         signingCredentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         signingChoices: List<QesDocumentSigningChoice>,
     ): KmmResult<QesSigningResult> = catching {
+        require(qesValidationService != null && qesDocumentPreparationService != null) { "QES Services not configured!" }
         val ordinaryPresentation = qesDocumentPreparationService.prepareQesCredentialPresentation(
             preparationState, credentialSubmissions, signingCredentials.keys,
         )
