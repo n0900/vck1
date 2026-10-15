@@ -16,7 +16,9 @@ import kotlin.jvm.JvmOverloads
  * Preserve the supplied hashes and algorithm parameters. Return the synchronous response with one Base64 signature.
  * AdES format/conformance handling belongs to document preparation and subsequent signature construction.
  */
-typealias QesQtspSigner = suspend (SignHashRequestParameters) -> KmmResult<SignHashResponseParameters>
+fun interface QesQtspSigner {
+    suspend operator fun invoke(param: SignHashRequestParameters): KmmResult<SignHashResponseParameters>
+}
 
 /**
  * Metadata and a CSC signHash callback from the application's trusted provider integration.
