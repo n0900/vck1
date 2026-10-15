@@ -10,6 +10,7 @@ import at.asitplus.openid.OpenIdConstants
 import at.asitplus.openid.OpenIdConstants.ClientIdScheme
 import at.asitplus.openid.OpenIdConstants.Errors.INVALID_REQUEST
 import at.asitplus.openid.OpenIdConstants.VP_TOKEN
+import at.asitplus.openid.QesRequest
 import at.asitplus.openid.RelyingPartyMetadata
 import at.asitplus.openid.RequestObjectParameters
 import at.asitplus.openid.RequestParameters
@@ -19,6 +20,8 @@ import at.asitplus.openid.SupportedAlgorithmsContainerIso
 import at.asitplus.openid.SupportedAlgorithmsContainerJwt
 import at.asitplus.openid.SupportedAlgorithmsContainerSdJwt
 import at.asitplus.openid.VpFormatsSupported
+import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
+import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.signum.indispensable.cosef.toCoseAlgorithm
 import at.asitplus.signum.indispensable.josef.JsonWebKey
@@ -51,7 +54,12 @@ import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
 import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
+import at.asitplus.wallet.lib.rqes.QesDocumentSigningChoice
+import at.asitplus.wallet.lib.rqes.QesDocumentSigningResult
 import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
+import at.asitplus.wallet.lib.rqes.QesSigningCredential
+import at.asitplus.wallet.lib.rqes.QesSigningResult
+import at.asitplus.wallet.lib.rqes.QesSigningService
 import at.asitplus.wallet.lib.utils.DefaultMapStore
 import at.asitplus.wallet.lib.utils.MapStore
 import com.benasher44.uuid.uuid4
@@ -269,7 +277,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
 
     /**
      * Parses the [AuthenticationRequestParameters] from [input] and loads remote objects (client metadata, keys, QES documents).
-     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse].
+     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
+     * or, for QES, [executeQesSigning].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -283,7 +292,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
      * Validates the [AuthenticationRequestParameters] from [params] and loads remote objects (client metadata, keys).
      * Authenticated QES requests additionally resolve documents, verify checksums, and prepare DTBSRs through
      * [qesDocumentRetriever] and [qesDtbsrPreparer].
-     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse].
+     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
+     * or, for QES, [executeQesSigning].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -305,6 +315,44 @@ class OpenId4VpHolder @JvmOverloads constructor(
             audience = params.extractAudience(jsonWebKeys),
             preparedQesDocuments = preparedQesDocuments,
         )
+    }
+
+    /**
+     * ETSI TS 119 432 Annex A.7.3 step 4. Invoke only after the app obtains explicit consent, using the unmodified
+     * [preparationState] returned by [startAuthorizationResponsePreparation]. Selections must be explicit;
+     * an empty [credentialSubmissions] map is appropriate for an X.509-only request.
+     *
+     * Validates the complete DCQL selection, creates ordinary presentations, then signs each prepared document in
+     * request order. Does not retry: on failure, earlier remote signing operations may already have completed.
+     * Returns raw CSC signatures; container construction, embedding and response delivery (steps 5–6) are separate.
+     * Each selected credential's [QesSigningCredential.signHash] callback uses the CSC signatures/signHash contract;
+     * the application supplies its provider authorization and transport.
+     */
+    suspend fun executeQesSigning(
+        preparationState: AuthorizationResponsePreparationState,
+        credentialSubmissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
+        signingCredentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
+        signingChoices: List<QesDocumentSigningChoice>,
+    ): KmmResult<QesSigningResult> = catching {
+        val service = QesSigningService()
+        val operations = service.validate(preparationState, credentialSubmissions, signingCredentials, signingChoices)
+        val ordinaryPresentation = service.ordinaryPresentation(
+            preparationState.request.parameters.dcqlQuery!!, credentialSubmissions,
+        )
+        val presentations = ordinaryPresentation?.let {
+            presentationFactory.createPresentation(preparationState, holder, it).getOrThrow() as DCQLParameters
+        } ?: DCQLParameters(emptyMap())
+        val results = operations.map { operation ->
+            val response = operation.signHash(operation.request).getOrThrow()
+            service.validateResponse(response)
+            QesDocumentSigningResult(
+                credentialQueryId = operation.credentialQueryId,
+                preparedDocument = operation.preparedDocument,
+                request = operation.request,
+                response = response,
+            )
+        }
+        QesSigningResult(presentations, results)
     }
 
     /**
@@ -339,6 +387,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
         credentialPresentation: CredentialPresentation? = null,
     ): KmmResult<AuthenticationResponse> = catching {
         with(state) {
+            if (request.parameters.transactionDataDecoded.orEmpty().any { it is QesRequest })
+                throw InvalidRequest("QES requires executeQesSigning and subsequent signature result processing")
             val presentation = credentialPresentation ?: credentialPresentationRequest?.toCredentialPresentation()
             val resultContainer = presentation?.let {
                 presentationFactory.createPresentation(
