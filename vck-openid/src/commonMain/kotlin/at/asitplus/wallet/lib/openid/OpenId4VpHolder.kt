@@ -2,8 +2,6 @@ package at.asitplus.wallet.lib.openid
 
 import at.asitplus.KmmResult
 import at.asitplus.catching
-import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
-import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.AuthenticationRequestParameters
 import at.asitplus.openid.AuthenticationResponseParameters
 import at.asitplus.openid.JarRequestParameters
@@ -23,10 +21,7 @@ import at.asitplus.openid.SupportedAlgorithmsContainerJwt
 import at.asitplus.openid.SupportedAlgorithmsContainerSdJwt
 import at.asitplus.openid.VpFormatsSupported
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
-import at.asitplus.openid.dcql.DCQLCredentialQueryList
-import at.asitplus.openid.dcql.DCQLCredentialSetQuery
 import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
-import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.signum.indispensable.cosef.toCoseAlgorithm
 import at.asitplus.signum.indispensable.josef.JsonWebKey
@@ -58,11 +53,8 @@ import at.asitplus.wallet.lib.oidvci.OAuth2Error
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
-import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
-import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
 import at.asitplus.wallet.lib.rqes.QesDocumentSigningChoice
 import at.asitplus.wallet.lib.rqes.QesDocumentSigningResult
-import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
 import at.asitplus.wallet.lib.rqes.QesSigningCredential
 import at.asitplus.wallet.lib.rqes.QesSigningResult
 import at.asitplus.wallet.lib.rqes.QesSigningService
@@ -121,10 +113,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
     private val supportedJweEncryptionAlgorithms: Set<JweEncryption> = JweEncryption.entries.toSet(),
     /** Set to reject a plain request object we have fetched with POST (when RP supports that) */
     private val requireEncryptedRequests: Boolean = false,
-    /** Retrieves binary QES documents. Required only for QES document references. */
-    private val qesDocumentRetriever: QesDocumentRetriever? = null,
-    /** Prepares format-specific DTBSRs and reusable context. Required for QES signature requests. */
-    private val qesDtbsrPreparer: QesDtbsrPreparer? = null,
+    private val qesSigningService: QesSigningService
 ) {
 
     init {
@@ -307,7 +296,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
         params: RequestParametersFrom<AuthenticationRequestParameters>,
     ): KmmResult<AuthorizationResponsePreparationState> = catching {
         authorizationRequestValidator.validateAuthorizationRequest(params)
-        val preparedQesDocuments = QesDocumentPreparationService(qesDocumentRetriever, qesDtbsrPreparer)
+        val preparedQesDocuments = qesSigningService.qesDocumentPreparationService
             .prepare(params.parameters.transactionDataDecoded.orEmpty())
         val loadedKeys = (params.parameters.clientMetadata?.loadJsonWebKeySet()?.keys
             ?: lookupJsonWebKeysForClient(JsonWebKeyLookupInput(params.parameters.clientId))?.keys)
@@ -340,11 +329,10 @@ class OpenId4VpHolder @JvmOverloads constructor(
         signingCredentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         signingChoices: List<QesDocumentSigningChoice>,
     ): KmmResult<QesSigningResult> = catching {
-        val service = QesSigningService()
-        val ordinaryPresentation = prepareQesCredentialPresentation(
+        val ordinaryPresentation = qesSigningService.prepareQesCredentialPresentation(
             preparationState, credentialSubmissions, signingCredentials.keys,
         )
-        val operations = service.validate(preparationState, signingCredentials, signingChoices)
+        val operations = qesSigningService.validate(preparationState, signingCredentials, signingChoices)
         val presentations = ordinaryPresentation?.let {
             presentationFactory.createPresentation(preparationState, holder, it).getOrElse { error ->
                 error.getUserSignatureCancellationException()?.let { throw it }
@@ -355,7 +343,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
         } ?: DCQLParameters(emptyMap())
         val results = operations.map { operation ->
             val response = operation.signHash(operation.request).getOrThrow()
-            service.validateResponse(response)
+            qesSigningService.validateResponse(response)
             QesDocumentSigningResult(
                 credentialQueryId = operation.credentialQueryId,
                 preparedDocument = operation.preparedDocument,
@@ -364,37 +352,6 @@ class OpenId4VpHolder @JvmOverloads constructor(
             )
         }
         QesSigningResult(presentations, results)
-    }
-
-    /** Check the combined selection, then let Holder validate and present the ordinary credentials. */
-    private fun prepareQesCredentialPresentation(
-        state: AuthorizationResponsePreparationState,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
-        signingQueryIds: Set<DCQLCredentialQueryIdentifier>,
-    ): CredentialPresentation.DCQLPresentation? {
-        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
-        if (state.credentialPresentationRequest != CredentialPresentationRequest.DCQLRequest(query))
-            throw InvalidTransactionData("QES preparation does not match the authorization request")
-        val selectedIds = submissions.keys + signingQueryIds
-        if (selectedIds.any { id -> query.credentials.none { it.id == id } })
-            throw InvalidTransactionData("Unknown selected DCQL query")
-        query.checkCredentialSetQueryRequirements(selectedIds).getOrElse {
-            throw InvalidTransactionData("QES selection does not satisfy DCQL credential sets", it)
-        }
-        val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
-        if (submissions.keys.any { id -> ordinary.none { it.id == id } })
-            throw InvalidTransactionData("X.509 requires a signing credential")
-        if (ordinary.isEmpty()) return null
-        return CredentialPresentation.DCQLPresentation(
-            presentationRequest = CredentialPresentationRequest.DCQLRequest(query.copy(
-                credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
-                // The original sets were satisfied by the combined ordinary and signing selection above.
-                credentialSets = nonEmptyListOf(DCQLCredentialSetQuery(
-                    options = nonEmptyListOf(ordinary.map { it.id }), required = false,
-                )),
-            )),
-            credentialQuerySubmissions = submissions,
-        )
     }
 
     /**

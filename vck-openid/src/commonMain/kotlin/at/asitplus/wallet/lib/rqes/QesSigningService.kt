@@ -7,9 +7,14 @@ import at.asitplus.csc.api.collection_entries.CertificateParameters
 import at.asitplus.csc.api.collection_entries.KeyParameters
 import at.asitplus.csc.bindings.QesSignatureRequest
 import at.asitplus.csc.datamodel.basic.SigningAlgorithm
+import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
+import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.QesRequest
 import at.asitplus.openid.TransactionData
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
+import at.asitplus.openid.dcql.DCQLCredentialQueryList
+import at.asitplus.openid.dcql.DCQLCredentialSetQuery
+import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.openid.dcql.DCQLQuery
 import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.openid.dcql.X509MetadataQuery
@@ -21,6 +26,9 @@ import at.asitplus.signum.indispensable.asn1.encoding.parse
 import at.asitplus.signum.indispensable.asn1.readOid
 import at.asitplus.signum.indispensable.pki.X509Certificate
 import at.asitplus.signum.supreme.hash.digest
+import at.asitplus.wallet.lib.agent.SubjectCredentialStore
+import at.asitplus.wallet.lib.data.CredentialPresentation
+import at.asitplus.wallet.lib.data.CredentialPresentationRequest
 import at.asitplus.wallet.lib.etsi.isValidAt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
@@ -36,8 +44,45 @@ internal data class QesSigningOperation(
 )
 
 /** Validates signing credentials and prepared documents before invoking CSC signHash. */
-internal class QesSigningService {
-    fun validate(
+class QesSigningService(
+    internal val qesDocumentPreparationService: QesDocumentPreparationService,
+) {
+    /** Check the combined selection, then let Holder validate and present the ordinary credentials. */
+    internal fun prepareQesCredentialPresentation(
+        state: AuthorizationResponsePreparationState,
+        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
+        signingQueryIds: Set<DCQLCredentialQueryIdentifier>,
+    ): CredentialPresentation.DCQLPresentation? {
+        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
+        if (state.credentialPresentationRequest != CredentialPresentationRequest.DCQLRequest(query))
+            throw InvalidTransactionData("QES preparation does not match the authorization request")
+        val selectedIds = submissions.keys + signingQueryIds
+        if (selectedIds.any { id -> query.credentials.none { it.id == id } })
+            throw InvalidTransactionData("Unknown selected DCQL query")
+        query.checkCredentialSetQueryRequirements(selectedIds).getOrElse {
+            throw InvalidTransactionData("QES selection does not satisfy DCQL credential sets", it)
+        }
+        val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
+        if (submissions.keys.any { id -> ordinary.none { it.id == id } })
+            throw InvalidTransactionData("X.509 requires a signing credential")
+        if (ordinary.isEmpty()) return null
+        return CredentialPresentation.DCQLPresentation(
+            presentationRequest = CredentialPresentationRequest.DCQLRequest(
+                query.copy(
+                    credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
+                    // The original sets were satisfied by the combined ordinary and signing selection above.
+                    credentialSets = nonEmptyListOf(
+                        DCQLCredentialSetQuery(
+                            options = nonEmptyListOf(ordinary.map { it.id }), required = false,
+                        )
+                    ),
+                )
+            ),
+            credentialQuerySubmissions = submissions,
+        )
+    }
+
+    internal fun validate(
         state: AuthorizationResponsePreparationState,
         credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         choices: List<QesDocumentSigningChoice>,
@@ -145,7 +190,7 @@ internal class QesSigningService {
         credential: QesSigningCredential,
     ): SigningAlgorithm {
         val algorithm = choice.signingAlgorithm ?: request.signingAlgorithm
-            ?: throw InvalidTransactionData("QES requires an explicit signing algorithm choice")
+        ?: throw InvalidTransactionData("QES requires an explicit signing algorithm choice")
         require(request.signingAlgorithm == null || algorithm == request.signingAlgorithm) {
             "Signing algorithm differs from the original request"
         }
