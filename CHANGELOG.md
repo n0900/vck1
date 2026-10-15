@@ -1,21 +1,18 @@
 # Changelog
 
 Release 9.0.0 (unreleased):
-- Implement ETSI TS 119 432 Annex A.7.3 step 1 in `OpenId4VpHolder.startAuthorizationResponsePreparation()`:
-  require signed QES request objects and configured relying-party trust, validate X.509 DCQL references, and retain
-  the original transaction data in the existing preparation state.
-- Make QES profile dispatch explicit and authenticate the RP before validating transaction semantics.
-  Consume `wallet_nonce` at the start of validation, including attempts rejected by subsequent checks.
-- Reject JAR invocations whose `client_id` differs from the signed request object's `client_id`.
-- Add request-side X.509 DCQL support for ETSI TS 119 432 Annex A.6: `CredentialFormatEnum.X509`,
-  `DCQLX509CredentialQuery`, and `X509MetadataQuery` implementing `DCQLCredentialMetadataAndValidityConstraints`.
-- Moved `Base64URLTransactionDataSerializer` to openid-data-classes
-- QES approvals:
-    - Bind each approval transaction to one selected DCQL credential submission, allowing separate approvals for distinct queries without adding approvals to unrelated identity presentations
-    - Treat multiple `credential_ids` as alternatives and reject missing, empty, or unknown query references in OpenID4VP transaction data with `invalid_transaction_data`
-    - Add optional `PresentationRequestParameters.qesApprovalTransactionData` for selecting approval data independently of the general SD-JWT transaction-data integrity hashes
+- ETSI TS 119 432 Annex A (QES):
+    - Add request-side X.509 DCQL support (A.6)
+    - Implement request preparation (A.7.3 step 1): require signed requests and RP trust, validate X.509 references, and retain original transaction data
+    - Dispatch QES requests explicitly and authenticate the RP before transaction validation
+    - Bind approvals to selected DCQL submissions; treat `credential_ids` as alternatives and reject invalid references with `invalid_transaction_data`
+    - Add `PresentationRequestParameters.qesApprovalTransactionData` for independent approval selection
+- OpenID for Verifiable Presentations:
+    - Consume `wallet_nonce` at the start of every validation attempt
+    - Reject JAR `client_id` mismatches
+    - Move `Base64URLTransactionDataSerializer` to `openid-data-classes`
 - CSC data classes:
-    - BREAKING: Split CSC API into a new `api` subfolder and add the `datamodel` package
+    - BREAKING: Move CSC API to `api`; add the `datamodel` package
     - Implement CSC Data Model 1.0.0
 - Remove code elements deprecated in 8.0.0: Presentation Exchange, module `dif-data-classes` and others
 - Remove deprecated Presentation Exchange types and `dif-data-classes` compatibility surface
