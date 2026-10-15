@@ -6,7 +6,10 @@ import at.asitplus.iso.sha256
 import at.asitplus.openid.AuthenticationRequestParameters
 import at.asitplus.openid.OpenIdConstants
 import at.asitplus.openid.OpenIdConstants.ClientIdScheme
+import at.asitplus.openid.QesRequest
 import at.asitplus.openid.RequestParametersFrom
+import at.asitplus.openid.TransactionData
+import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.signum.indispensable.CryptoPublicKey
 import at.asitplus.signum.indispensable.io.Base64UrlStrict
 import at.asitplus.signum.indispensable.josef.JWS
@@ -44,6 +47,9 @@ internal class AuthorizationRequestValidator(
     suspend fun validateAuthorizationRequest(
         request: RequestParametersFrom<AuthenticationRequestParameters>,
     ) {
+        //Since it's a nonce we should probably remove it at the very beginning?
+        request.consumeWalletNonce()
+
         (request as? RequestParametersFrom.RequestParametersSigned<AuthenticationRequestParameters>)
             ?.jwsTyped?.jws?.requireRequestObjectType()
 
@@ -53,7 +59,10 @@ internal class AuthorizationRequestValidator(
             }
         } ?: throw InvalidRequest("response_type is null")
 
-        request.parameters.validateTransactionData()
+        val signingQueryIds = request.parameters.dcqlQuery?.credentials?.filterIsInstance<DCQLX509CredentialQuery>()
+            ?.map { it.id.string }?.toSet().orEmpty()
+        // X.509 queries identify Annex A without decoding untrusted transaction data.
+        if (signingQueryIds.isNotEmpty()) request.requireQesAuthentication()
 
         if (request.parameters.responseMode.isAnyDcApi()) {
             request.validateDcApi()
@@ -76,22 +85,89 @@ internal class AuthorizationRequestValidator(
                 configured = "custom trust source for client identifier scheme ${clientIdScheme.stringRepresentation}"
             ) { it.evaluate(request) }
         }
-        if (request.isFromRequestObject()) {
-            request.parameters.walletNonce?.let {
-                if (walletNonceMapStore.remove(it) != it) {
+        val transactionData = request.parameters.decodeTransactionData()
+        val qesTransactions = transactionData.orEmpty().filterIsInstance<QesRequest>()
+        // Still enforce QES requirements when a qesRequest omits the required X.509 queries.
+        if (signingQueryIds.isEmpty() && qesTransactions.isNotEmpty()) request.requireQesAuthentication()
+        val isQesRequest = signingQueryIds.isNotEmpty() || qesTransactions.isNotEmpty()
+        request.parameters.validateTransactionData(transactionData)
+        if (isQesRequest) request.parameters.validateQesRequest(qesTransactions, signingQueryIds)
+    }
+
+    /**
+     * A wallet nonce permits one validation attempt. Consume it before any other checks, including checks that fail.
+     */
+    private suspend fun RequestParametersFrom<AuthenticationRequestParameters>.consumeWalletNonce() {
+        if (isFromRequestObject()) {
+            parameters.walletNonce?.let {
+                if (walletNonceMapStore.remove(it) != it)
                     throw InvalidRequest("wallet_nonce from request not known to us: $it")
-                }
             }
         }
     }
 
     /**
+     * ETSI TS 119 432 Annex A.7.3, step 1: require a signed request and a supported source of RP trust.
+     * Actual signature and trust verification use the shared client identifier checks.
+     */
+    private fun RequestParametersFrom<AuthenticationRequestParameters>.requireQesAuthentication() {
+        val signedRequest = this as? RequestParametersFrom.RequestParametersSigned<AuthenticationRequestParameters>
+            ?: throw InvalidRequest("QES requires a signed OpenID4VP authorization request")
+        // The overload accepting parsed requests must validate the parameters covered by the signature.
+        val signedParameters = when (val jws = signedRequest.jwsTyped.jws) {
+            is JwsCompact -> jws.typed<AuthenticationRequestParameters, JwsCompact>().payload
+            is JwsGeneral -> jws.typed<AuthenticationRequestParameters, JwsGeneral>().payload
+            else -> throw InvalidRequest("Unsupported QES request object signature")
+        }
+        if (signedParameters != parameters)
+            throw InvalidRequest("QES parameters do not match the signed request object")
+        if (relyingPartyTrust == null)
+            throw InvalidRequest("QES requires configured relying-party trust")
+        when (parameters.clientIdSchemeExtracted) {
+            ClientIdScheme.PreRegistered, ClientIdScheme.X509SanDns, ClientIdScheme.X509Hash,
+            ClientIdScheme.VerifierAttestation -> Unit
+            else -> throw InvalidRequest("Unsupported QES client identifier scheme")
+        }
+    }
+
+    /** Validate Annex A parameters and transaction semantics only after RP authentication succeeds. */
+    private fun AuthenticationRequestParameters.validateQesRequest(
+        transactions: List<QesRequest>,
+        signingQueryIds: Set<String>,
+    ) {
+        if (responseType != OpenIdConstants.VP_TOKEN)
+            throw InvalidRequest("QES requires response_type=vp_token")
+        if (responseMode !in setOf(
+                OpenIdConstants.ResponseMode.Fragment,
+                OpenIdConstants.ResponseMode.DirectPost,
+                OpenIdConstants.ResponseMode.DirectPostJwt,
+            )) throw InvalidRequest("Unsupported QES response_mode")
+        if (nonce.isNullOrEmpty() || state.isNullOrEmpty())
+            throw InvalidRequest("QES requires nonce and state")
+        if (dcqlQuery == null)
+            throw InvalidRequest("QES requires dcql_query")
+        if (transactions.isEmpty())
+            throw InvalidTransactionData("QES requires qesRequest transaction data")
+        transactions.forEach {
+            if (!signingQueryIds.containsAll(it.credentialIds))
+                throw InvalidTransactionData("qesRequest must reference X.509 credential queries")
+            if (it.signatureRequests.isEmpty())
+                throw InvalidTransactionData("qesRequest must contain signatureRequests")
+        }
+    }
+
+    /** Decode after the RP checks, preserving the protocol error for malformed transaction data. */
+    private fun AuthenticationRequestParameters.decodeTransactionData(): List<TransactionData>? =
+        catchingUnwrapped { transactionDataDecoded }
+            .getOrElse { throw InvalidTransactionData("Invalid transaction_data", it) }
+
+    /**
      * OpenID4VP 1.0 sections 5.1 and 8.5 require non-empty DCQL credential_ids. CSC's conditional omission
      * of this field applies to other transaction protocols, not to an OpenID4VP authorization request.
      */
-    private fun AuthenticationRequestParameters.validateTransactionData(): Unit =
+    private fun AuthenticationRequestParameters.validateTransactionData(transactionData: List<TransactionData>?): Unit =
         catchingUnwrapped {
-            transactionDataDecoded?.let {
+            transactionData?.let {
                 require(it.isNotEmpty()) { "transaction_data must be non-empty" }
                 val queryIds = dcqlQuery?.credentials?.map { it.id.string }?.toSet()
                 it.forEach { data ->

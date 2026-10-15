@@ -7,12 +7,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * D3.1: UC Specification WP3:
+ * Legacy D3.1: UC Specification WP3 transaction data, retained for compatibility.
  * Transaction data entry used to gather the user’s consent to the terms of
  * service of the Verifier (e.g. the QTSP)
  */
 @Serializable
 @SerialName("qcert_creation_acceptance")
+@Deprecated("Legacy D3.1/WP3 transaction data; retained for compatibility", level = DeprecationLevel.WARNING)
 data class QCertCreationAcceptance(
     /**
      * D3.1: UC Specification WP3: REQUIRED.

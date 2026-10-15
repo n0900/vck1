@@ -153,6 +153,14 @@ val OpenIdRequestParserTests by matrixSuite {
     }
 
     testSuite("request object is rejected") {
+        listOf("request", "request_uri").asData(nameFn = { "with mismatched client_id in $it" }) test { transport ->
+            val requestObject = signRequestObject(authnRequest.copy(clientId = "x509_san_dns:other.example.com"))
+            val input = if (transport == "request") byValue(requestObject) else byReference
+            parserServing(requestObject).parseRequestParameters(input)
+                .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+                .message.shouldNotBeNull() shouldContain "client_id"
+        }
+
         // OpenID4VP 1.0, 5: "Wallets MUST NOT process Request Objects where the typ Header Parameter is not present
         // or does not have the value oauth-authz-req+jwt"
         testSuite("without typ oauth-authz-req+jwt") {

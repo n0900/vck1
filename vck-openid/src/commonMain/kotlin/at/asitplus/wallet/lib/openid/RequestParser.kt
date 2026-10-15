@@ -83,6 +83,11 @@ class RequestParser(
                 .also { resolved ->
                     if (resolved.parameters is JarRequestParameters)
                         throw InvalidRequest("request object must not contain `request` or `request_uri`")
+                    // OpenID4VP 1.0, 5.10.1 / RFC 9101, 6.3: bind the invocation to the signed client identity.
+                    (resolved.parameters as? AuthenticationRequestParameters)?.let {
+                        if (it.clientId != jar.clientId)
+                            throw InvalidRequest("request object client_id does not match authorization request client_id")
+                    }
                 }
         } ?: this
 
