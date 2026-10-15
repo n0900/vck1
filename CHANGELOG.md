@@ -7,6 +7,7 @@ Release 9.0.0 (unreleased):
     - Dispatch QES from X.509 queries and authenticate the RP before decoding transaction data
     - Bind approvals to selected DCQL submissions; treat `credential_ids` as alternatives and reject invalid references with `invalid_transaction_data`
     - Add `PresentationRequestParameters.qesApprovalTransactionData` for independent approval selection
+    - Add QES document retrieval, checksum verification, and DTBSR preparation to `OpenId4VpHolder`
 - OpenID for Verifiable Presentations:
     - Consume `wallet_nonce` at the start of every validation attempt
     - Reject JAR `client_id` mismatches
