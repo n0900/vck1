@@ -5,14 +5,19 @@ import at.asitplus.csc.api.SignHashRequestParameters
 import at.asitplus.csc.api.SignHashResponseParameters
 import at.asitplus.csc.api.collection_entries.CertificateParameters
 import at.asitplus.csc.api.collection_entries.KeyParameters
+import at.asitplus.csc.bindings.QesSignatureRequest
+import at.asitplus.csc.datamodel.basic.SigningAlgorithm
+import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
 import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.QesRequest
+import at.asitplus.openid.TransactionData
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
 import at.asitplus.openid.dcql.DCQLCredentialQueryList
 import at.asitplus.openid.dcql.DCQLCredentialSetQuery
 import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.openid.dcql.DCQLQuery
 import at.asitplus.openid.dcql.DCQLX509CredentialQuery
+import at.asitplus.openid.dcql.X509MetadataQuery
 import at.asitplus.signum.indispensable.CryptoPublicKey
 import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.signum.indispensable.asn1.Asn1Element
@@ -47,10 +52,39 @@ internal class QesSigningService {
         credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         choices: List<QesDocumentSigningChoice>,
     ): List<QesSigningOperation> = catching {
+        val query = requireDcqlQuery(state)
+        validateCredentialSelections(query, submissions, credentials)
+        validateOrdinarySubmissions(query, submissions)
+
+        val transactions = state.request.parameters.transactionDataDecoded.orEmpty()
+        val selections = resolveDocumentChoices(transactions, state.preparedQesDocuments, choices)
+        validateTransactionCredentials(choices, credentials.keys)
+        selections.map { (document, choice) ->
+            createSigningOperation(
+                transaction = transactions[document.transactionIndex] as QesRequest,
+                document = document,
+                credential = credentials.getValue(choice.credentialQueryId),
+                choice = choice,
+            )
+        }
+    }.getOrElse {
+        if (it is InvalidRequest || it is InvalidTransactionData) throw it
+        else throw InvalidTransactionData("Invalid QES signing selection", it)
+    }
+
+    private fun requireDcqlQuery(state: AuthorizationResponsePreparationState): DCQLQuery {
         val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
         require(state.credentialPresentationRequest == CredentialPresentationRequest.DCQLRequest(query)) {
             "QES preparation does not match the authorization request"
         }
+        return query
+    }
+
+    private fun validateCredentialSelections(
+        query: DCQLQuery,
+        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
+        credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
+    ) {
         val selectedIds = submissions.keys + credentials.keys
         require(selectedIds.all { id -> query.credentials.any { it.id == id } }) { "Unknown selected DCQL query" }
         query.checkCredentialSetQueryRequirements(selectedIds).getOrThrow()
@@ -65,7 +99,12 @@ internal class QesSigningService {
                 ?: throw InvalidTransactionData("Signing selection must reference an X.509 query")
             validateCredential(credentialQuery, credential)
         }
+    }
 
+    private suspend fun validateOrdinarySubmissions(
+        query: DCQLQuery,
+        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
+    ) {
         // Match explicit ordinary submissions again, so caller-supplied matching results cannot bypass DCQL.
         ordinaryPresentation(query, submissions)?.let { presentation ->
             val selected = submissions.values.flatten().map { it.credential }.distinct()
@@ -78,87 +117,115 @@ internal class QesSigningService {
                 }
             }
         }
+    }
 
-        val transactions = state.request.parameters.transactionDataDecoded.orEmpty()
+    private fun resolveDocumentChoices(
+        transactions: List<TransactionData>,
+        documents: List<PreparedQesDocument>,
+        choices: List<QesDocumentSigningChoice>,
+    ): List<Pair<PreparedQesDocument, QesDocumentSigningChoice>> {
         val expected = transactions.flatMapIndexed { transactionIndex, transaction ->
             (transaction as? QesRequest)?.signatureRequests.orEmpty().indices.map { transactionIndex to it }
         }
         require(expected.isNotEmpty()) { "QES requires signature requests" }
-        val prepared = state.preparedQesDocuments.associateBy { it.transactionIndex to it.signatureRequestIndex }
+        val prepared = documents.associateBy { it.transactionIndex to it.signatureRequestIndex }
         val selected = choices.associateBy { it.transactionIndex to it.signatureRequestIndex }
-        require(prepared.size == state.preparedQesDocuments.size && prepared.keys == expected.toSet()) {
+        require(prepared.size == documents.size && prepared.keys == expected.toSet()) {
             "Prepared QES documents do not cover the original signature requests"
         }
         require(selected.size == choices.size && selected.keys == expected.toSet()) {
             "QES signing choices must cover each prepared document exactly once"
         }
+        return expected.map { prepared.getValue(it) to selected.getValue(it) }
+    }
+
+    private fun validateTransactionCredentials(
+        choices: List<QesDocumentSigningChoice>,
+        credentialQueryIds: Set<DCQLCredentialQueryIdentifier>,
+    ) {
         // One authorizing credential per transaction, even when credential_ids offers alternatives.
         choices.groupBy { it.transactionIndex }.values.forEach { transactionChoices ->
             require(transactionChoices.map { it.credentialQueryId }.distinct().size == 1) {
                 "A QES transaction must use one selected signing credential"
             }
         }
-        require(credentials.keys == choices.map { it.credentialQueryId }.toSet()) {
+        require(credentialQueryIds == choices.map { it.credentialQueryId }.toSet()) {
             "Every selected signing credential must authorize a document"
         }
-        expected.map { index ->
-            val transaction = transactions[index.first] as QesRequest
-            val request = transaction.signatureRequests[index.second]
-            val choice = selected.getValue(index)
-            require(choice.credentialQueryId.string in transaction.credentialIds) {
-                "Signing choice is outside the transaction's credential_ids"
-            }
-            val credential = credentials.getValue(choice.credentialQueryId)
-            require(
-                credential.credentialInfo.signatureQualifier == request.signatureQualifier &&
-                        (transaction.signatureQualifier == null || transaction.signatureQualifier == request.signatureQualifier)
-            ) {
-                "Signing credential cannot produce the requested signature qualifier"
-            }
-            val algorithm = choice.signingAlgorithm ?: request.signingAlgorithm
-            ?: throw InvalidTransactionData("QES requires an explicit signing algorithm choice")
-            require(request.signingAlgorithm == null || algorithm == request.signingAlgorithm) {
-                "Signing algorithm differs from the original request"
-            }
-            require(algorithm.signAlgo in credential.credentialInfo.keyParameters.algo) {
-                "Signing algorithm is not supported by the credential"
-            }
-            val resolvedAlgorithm = algorithm.toSignatureAlgorithmOrNull()
-                ?: throw InvalidTransactionData("Unsupported QES signing algorithm or parameters")
-            val document = prepared.getValue(index)
-            val dtbsr = document.preparation.dtbsr
-            val digest = when (resolvedAlgorithm) {
-                is SignatureAlgorithm.ECDSA -> resolvedAlgorithm.digest
-                is SignatureAlgorithm.RSA -> resolvedAlgorithm.digest
-            }
-            require(digest == dtbsr.digest && dtbsr.value.size.toUInt() * 8U == dtbsr.digest.outputLength.bits) {
-                "Signing algorithm and prepared DTBSR digest are incompatible"
-            }
-            val key = credential.credentialInfo.certParameters!!.certificates!!.first().decodedPublicKey.getOrThrow()
-            require(
-                when (resolvedAlgorithm) {
-                    is SignatureAlgorithm.ECDSA -> key is CryptoPublicKey.EC &&
-                            (resolvedAlgorithm.requiredCurve == null || resolvedAlgorithm.requiredCurve == key.curve)
+    }
 
-                    is SignatureAlgorithm.RSA -> key is CryptoPublicKey.RSA
-                }
-            ) { "Signing algorithm is incompatible with the certificate key" }
-            QesSigningOperation(
-                credentialQueryId = choice.credentialQueryId,
-                preparedDocument = document,
-                request = SignHashRequestParameters(
-                    credentialId = credential.credentialId,
-                    hashes = listOf(dtbsr.value.copyOf()),
-                    hashAlgorithmOid = dtbsr.algorithmOid,
-                    signAlgoOid = algorithm.signAlgo,
-                    signAlgoParams = algorithm.signAlgoParams,
-                ),
-                signHash = credential.signHash,
-            )
+    private fun createSigningOperation(
+        transaction: QesRequest,
+        document: PreparedQesDocument,
+        credential: QesSigningCredential,
+        choice: QesDocumentSigningChoice,
+    ): QesSigningOperation {
+        val request = transaction.signatureRequests[choice.signatureRequestIndex]
+        require(choice.credentialQueryId.string in transaction.credentialIds) {
+            "Signing choice is outside the transaction's credential_ids"
         }
-    }.getOrElse {
-        if (it is InvalidRequest || it is InvalidTransactionData) throw it
-        else throw InvalidTransactionData("Invalid QES signing selection", it)
+        require(
+            credential.credentialInfo.signatureQualifier == request.signatureQualifier &&
+                    (transaction.signatureQualifier == null || transaction.signatureQualifier == request.signatureQualifier)
+        ) {
+            "Signing credential cannot produce the requested signature qualifier"
+        }
+        val algorithm = resolveSigningAlgorithm(request, choice, credential)
+        validateAlgorithmCompatibility(algorithm, document, credential)
+        return QesSigningOperation(
+            credentialQueryId = choice.credentialQueryId,
+            preparedDocument = document,
+            request = SignHashRequestParameters(
+                credentialId = credential.credentialId,
+                hashes = listOf(document.preparation.dtbsr.value.copyOf()),
+                hashAlgorithmOid = document.preparation.dtbsr.algorithmOid,
+                signAlgoOid = algorithm.signAlgo,
+                signAlgoParams = algorithm.signAlgoParams,
+            ),
+            signHash = credential.signHash,
+        )
+    }
+
+    private fun resolveSigningAlgorithm(
+        request: QesSignatureRequest,
+        choice: QesDocumentSigningChoice,
+        credential: QesSigningCredential,
+    ): SigningAlgorithm {
+        val algorithm = choice.signingAlgorithm ?: request.signingAlgorithm
+            ?: throw InvalidTransactionData("QES requires an explicit signing algorithm choice")
+        require(request.signingAlgorithm == null || algorithm == request.signingAlgorithm) {
+            "Signing algorithm differs from the original request"
+        }
+        require(algorithm.signAlgo in credential.credentialInfo.keyParameters.algo) {
+            "Signing algorithm is not supported by the credential"
+        }
+        return algorithm
+    }
+
+    private fun validateAlgorithmCompatibility(
+        algorithm: SigningAlgorithm,
+        document: PreparedQesDocument,
+        credential: QesSigningCredential,
+    ) {
+        val resolvedAlgorithm = algorithm.toSignatureAlgorithmOrNull()
+            ?: throw InvalidTransactionData("Unsupported QES signing algorithm or parameters")
+        val dtbsr = document.preparation.dtbsr
+        val digest = when (resolvedAlgorithm) {
+            is SignatureAlgorithm.ECDSA -> resolvedAlgorithm.digest
+            is SignatureAlgorithm.RSA -> resolvedAlgorithm.digest
+        }
+        require(digest == dtbsr.digest && dtbsr.value.size.toUInt() * 8U == dtbsr.digest.outputLength.bits) {
+            "Signing algorithm and prepared DTBSR digest are incompatible"
+        }
+        val key = credential.credentialInfo.certParameters!!.certificates!!.first().decodedPublicKey.getOrThrow()
+        require(
+            when (resolvedAlgorithm) {
+                is SignatureAlgorithm.ECDSA -> key is CryptoPublicKey.EC &&
+                        (resolvedAlgorithm.requiredCurve == null || resolvedAlgorithm.requiredCurve == key.curve)
+
+                is SignatureAlgorithm.RSA -> key is CryptoPublicKey.RSA
+            }
+        ) { "Signing algorithm is incompatible with the certificate key" }
     }
 
     /** Validate the full query first; this projection only creates the ordinary credential artifacts. */
@@ -168,19 +235,16 @@ internal class QesSigningService {
     ): CredentialPresentation.DCQLPresentation? {
         val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
         if (ordinary.isEmpty()) return null
+        val ordinaryQuery = DCQLQuery(
+            credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
+            // The original requirements were checked against the complete selection above.
+            credentialSets = nonEmptyListOf(DCQLCredentialSetQuery(
+                options = nonEmptyListOf(ordinary.map { it.id }),
+                required = false,
+            )),
+        )
         return CredentialPresentation.DCQLPresentation(
-            presentationRequest = CredentialPresentationRequest.DCQLRequest(
-                DCQLQuery(
-                    credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
-                    credentialSets = listOf(
-                        DCQLCredentialSetQuery(
-                            // The original requirements were checked against the complete selection above.
-                            options = listOf(ordinary.map { it.id }).toNonEmptyList(),
-                            required = false,
-                        )
-                    ).toNonEmptyList(),
-                )
-            ),
+            presentationRequest = CredentialPresentationRequest.DCQLRequest(ordinaryQuery),
             credentialQuerySubmissions = submissions,
         )
     }
@@ -199,6 +263,15 @@ internal class QesSigningService {
         require(query.claims == null && query.claimSets == null && query.trustedAuthorities == null) {
             "Additional X.509 claims or trusted-authority constraints are not supported"
         }
+        val certificate = validateCredentialStatus(credential)
+        val key = certificate.decodedPublicKey.getOrThrow()
+        val parameters = credential.credentialInfo.keyParameters
+        validateProviderKeyMetadata(key, parameters)
+        validateCertificateMetadata(query.meta, certificate)
+        validateKeyConfigurations(query.meta, key, parameters)
+    }
+
+    private fun validateCredentialStatus(credential: QesSigningCredential): X509Certificate {
         require(credential.credentialId.isNotBlank()) { "Missing signing credential ID" }
         val info = credential.credentialInfo
         require(info.credentialID == null || info.credentialID == credential.credentialId) { "Credential ID mismatch" }
@@ -210,14 +283,20 @@ internal class QesSigningService {
         val certificate = info.certParameters?.certificates?.firstOrNull()
             ?: throw InvalidTransactionData("Signing credential requires its certificate")
         require(certificate.isValidAt()) { "Signing certificate is outside its validity period" }
-        val key = certificate.decodedPublicKey.getOrThrow()
+        return certificate
+    }
+
+    private fun validateProviderKeyMetadata(key: CryptoPublicKey, parameters: KeyParameters) {
         require(
             when (key) {
-                is CryptoPublicKey.EC -> info.keyParameters.curve == key.curve.oid
-                is CryptoPublicKey.RSA -> info.keyParameters.curve == null && info.keyParameters.len == key.bits.number
+                is CryptoPublicKey.EC -> parameters.curve == key.curve.oid
+                is CryptoPublicKey.RSA -> parameters.curve == null && parameters.len == key.bits.number
             }
         ) { "Provider key metadata does not match the certificate" }
-        with(query.meta) {
+    }
+
+    private fun validateCertificateMetadata(meta: X509MetadataQuery, certificate: X509Certificate) {
+        with(meta) {
             certificateFingerprints?.let { fingerprints ->
                 fingerprints.forEach { require(it.digest.outputLength.bits >= 256U) { "Weak certificate fingerprint" } }
                 require(fingerprints.any { it.value.contentEquals(it.digest.digest(certificate.encodeToDer())) }) {
@@ -227,15 +306,18 @@ internal class QesSigningService {
             if (certificatePolicies.isNotEmpty()) require(certificate.policyOids().any { it in certificatePolicies }) {
                 "Certificate policy does not match"
             }
-            keys?.let { configurations ->
-                require(configurations.any { configuration ->
-                    (configuration.algo == key.oid.toString() ||
-                            info.keyParameters.algo.any { it.toString() == configuration.algo }) && when (key) {
-                        is CryptoPublicKey.EC -> configuration.len == null && configuration.curve == key.curve.oid.toString()
-                        is CryptoPublicKey.RSA -> configuration.curve == null && configuration.len?.toUInt() == key.bits.number
-                    }
-                }) { "Signing key configuration does not match" }
-            }
+        }
+    }
+
+    private fun validateKeyConfigurations(meta: X509MetadataQuery, key: CryptoPublicKey, parameters: KeyParameters) {
+        meta.keys?.let { configurations ->
+            require(configurations.any { configuration ->
+                (configuration.algo == key.oid.toString() ||
+                        parameters.algo.any { it.toString() == configuration.algo }) && when (key) {
+                    is CryptoPublicKey.EC -> configuration.len == null && configuration.curve == key.curve.oid.toString()
+                    is CryptoPublicKey.RSA -> configuration.curve == null && configuration.len?.toUInt() == key.bits.number
+                }
+            }) { "Signing key configuration does not match" }
         }
     }
 
