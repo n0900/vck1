@@ -1,6 +1,8 @@
 package at.asitplus.wallet.lib.openid
 
+import at.asitplus.catching
 import at.asitplus.csc.bindings.QesSignatureRequest
+import at.asitplus.csc.datamodel.basic.Hash
 import at.asitplus.csc.datamodel.basic.SignatureQualifier
 import at.asitplus.csc.datamodel.documents.DocumentReference
 import at.asitplus.iso.sha256
@@ -13,6 +15,7 @@ import at.asitplus.openid.TransactionData
 import at.asitplus.openid.dcql.DCQLQuery
 import at.asitplus.openid.encodeToParameters
 import at.asitplus.openid.toBase64UrlJsonString
+import at.asitplus.signum.indispensable.Digest
 import at.asitplus.signum.indispensable.io.Base64UrlStrict
 import at.asitplus.signum.indispensable.josef.JwsCompact
 import at.asitplus.signum.indispensable.josef.io.joseCompliantSerializer
@@ -28,6 +31,9 @@ import at.asitplus.wallet.lib.jws.JwsHeaderCertOrJwk
 import at.asitplus.wallet.lib.jws.SignJwt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
+import at.asitplus.wallet.lib.rqes.QesDocumentPreparation
+import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
+import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
 import at.asitplus.wallet.lib.utils.DefaultMapStore
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -58,6 +64,8 @@ val OpenId4VpQesRequestTest by matrixSuite {
         var returnedJar = jar
         val holder = OpenId4VpHolder(
             relyingPartyTrust = fixture.trust,
+            qesDocumentRetriever = fixture.retriever,
+            qesDtbsrPreparer = fixture.preparer,
             remoteResourceRetriever = {
                 fetched = it
                 if (it.url != QesPreparationFixture.REQUEST_URI) error("Unexpected fetch: ${it.url}")
@@ -93,9 +101,11 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val hash = signer.getCertificate()!!.encodeToDer().sha256().encodeToString(Base64UrlStrict)
         val request = fixture.parameters.copy(clientId = "x509_hash:$hash")
         val jar = fixture.sign(request, signer)
-        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(ca.certificate) })).startAuthorizationResponsePreparation(
-                jar
-            ).getOrThrow().request.parameters shouldBe request
+        OpenId4VpHolder(
+            relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(ca.certificate) }),
+            qesDocumentRetriever = fixture.retriever,
+            qesDtbsrPreparer = fixture.preparer,
+        ).startAuthorizationResponsePreparation(jar).getOrThrow().request.parameters shouldBe request
         OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(TestCertificateAuthority().certificate) })).startAuthorizationResponsePreparation(
                 jar
             ).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
@@ -230,6 +240,8 @@ val OpenId4VpQesRequestTest by matrixSuite {
         var lookups = 0
         val holder = OpenId4VpHolder(
             walletNonceMapStore = nonceStore,
+            qesDocumentRetriever = fixture.retriever,
+            qesDtbsrPreparer = fixture.preparer,
             relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients {
                 lookups++
                 nonceStore.get(walletNonce) shouldBe null
@@ -301,6 +313,8 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val json = joseCompliantSerializer.encodeToString(fixture.parameters)
         val holder = OpenId4VpHolder(
             relyingPartyTrust = fixture.trust,
+            qesDocumentRetriever = fixture.retriever,
+            qesDtbsrPreparer = fixture.preparer,
             remoteResourceRetriever = { if (invalid == "plain request_uri") json else null },
         )
         val input = when (invalid) {
@@ -392,12 +406,20 @@ val OpenId4VpQesRequestTest by matrixSuite {
     }
 }
 
-private class QesPreparationFixture {
+internal class QesPreparationFixture {
     val signer = EphemeralKeyWithoutCert()
     val trust = setOf(RelyingPartyTrust.PreRegisteredClients { clientId ->
         if (clientId == CLIENT_ID) setOf(signer.jsonWebKey) else null
     })
-    val holder = OpenId4VpHolder(relyingPartyTrust = trust)
+    val retriever: QesDocumentRetriever = { catching { byteArrayOf(1, 2, 3) } }
+    val preparer: QesDtbsrPreparer = { _, bytes ->
+        catching { QesDocumentPreparation(Hash(bytes.sha256(), Digest.SHA256.oid)) }
+    }
+    val holder = OpenId4VpHolder(
+        relyingPartyTrust = trust,
+        qesDocumentRetriever = retriever,
+        qesDtbsrPreparer = preparer,
+    )
     val transaction = QesRequest(
         credentialIds = setOf("certificate"),
         signatureRequests = listOf(
