@@ -15,7 +15,6 @@ import at.asitplus.openid.dcql.DCQLQuery
 import at.asitplus.openid.toTransactionData
 import at.asitplus.wallet.lib.agent.SubjectCredentialStore.StoreEntry
 import at.asitplus.wallet.lib.data.CredentialPresentation
-import at.asitplus.wallet.lib.procedures.dcql.DCQLQueryAdapter
 import at.asitplus.wallet.lib.procedures.iso.DeviceRetrievalProcedure
 
 private typealias QesApprovalSubmission = Pair<DCQLCredentialQueryIdentifier, Int>
@@ -57,11 +56,19 @@ internal class PresentationResponseCreator(
         val credentialSubmissions = presentation.credentialQuerySubmissions
             ?: matchDCQLQuery(dcqlQuery).getOrThrow().toDefaultSubmission(dcqlQuery).getOrThrow()
 
-        DCQLQueryAdapter(dcqlQuery).validateSubmission(credentialSubmissions).getOrThrow()
+        DCQLQuery.Procedures.checkCredentialSetQueryRequirements(
+            credentialSubmissions = credentialSubmissions.keys,
+            requestedCredentialSetQueries = dcqlQuery.requestedCredentialSetQueries,
+        ).getOrThrow()
 
         val approvals = selectQesApprovals(request.transactionData, dcqlQuery, credentialSubmissions)
         val presentations = credentialSubmissions.mapValues { (queryId, submissions) ->
             val query = dcqlQuery.credentials.first { it.id == queryId }
+            if (!query.multiple && submissions.size != 1) {
+                throw IllegalArgumentException(
+                    "Credential query ${query.id} does not allow multiple submission, but ${submissions.size} were provided."
+                )
+            }
             submissions.mapIndexed { submissionIndex, it ->
                 val credential = it.credential
                 if (credential is StoreEntry.Vc && !query.requireCryptographicHolderBinding) {

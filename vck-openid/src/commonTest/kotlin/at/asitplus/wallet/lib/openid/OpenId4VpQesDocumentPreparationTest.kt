@@ -20,11 +20,9 @@ import at.asitplus.testballoon.matrix.matrixSuite
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 import at.asitplus.wallet.lib.rqes.QesDocumentPreparation
-import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
 import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
 import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
 import io.kotest.assertions.throwables.shouldThrow
-import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CancellationException
@@ -56,7 +54,7 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
             },
         ).getOrThrow()
         calls shouldBe 1
-        state.preparedQesDocuments.shouldNotBeNull().single().apply {
+        state.preparedQesDocuments.single().apply {
             transactionIndex shouldBe 0
             signatureRequestIndex shouldBe 0
             document.contentEquals(bytes) shouldBe true
@@ -74,7 +72,7 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
             joseCompliantSerializer.encodeToString(state),
         )
         restored shouldBe state
-        restored.preparedQesDocuments.shouldNotBeNull().hashCode() shouldBe state.preparedQesDocuments.shouldNotBeNull().hashCode()
+        restored.preparedQesDocuments.hashCode() shouldBe state.preparedQesDocuments.hashCode()
     }
 
     listOf(Digest.SHA256, Digest.SHA384, Digest.SHA512)
@@ -108,7 +106,7 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
                     QesDocumentPreparation(Hash(Digest.SHA256.digest(byteArrayOf(99)), Digest.SHA256.oid))
                 }
             },
-        ).getOrThrow().preparedQesDocuments.shouldNotBeNull().single()
+        ).getOrThrow().preparedQesDocuments.single()
         prepared shouldBe 1
         result.integrityVerified shouldBe true
         result.preparation.dtbsr shouldBe Hash(Digest.SHA256.digest(byteArrayOf(99)), Digest.SHA256.oid)
@@ -136,7 +134,7 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
             },
         ).getOrThrow()
         fetched shouldBe 1
-        state.preparedQesDocuments.shouldNotBeNull().single().integrityVerified shouldBe false
+        state.preparedQesDocuments.single().integrityVerified shouldBe false
     }
 
     listOf("mismatch", "weak algorithm")
@@ -226,10 +224,8 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
         var calls = 0
         OpenId4VpHolder(
             relyingPartyTrust = emptySet(),
-            qesDocumentPreparationService = QesDocumentPreparationService(
-                retriever = { reference -> calls++; fixture.retriever(reference) },
-                preparer = { request, bytes -> calls++; fixture.preparer(request, bytes) },
-            ),
+            qesDocumentRetriever = { reference -> calls++; fixture.retriever(reference) },
+            qesDtbsrPreparer = { request, bytes -> calls++; fixture.preparer(request, bytes) },
         ).startAuthorizationResponsePreparation(fixture.sign()).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
         calls shouldBe 0
     }
@@ -251,10 +247,8 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
             ),
         )
         val state = OpenId4VpHolder(
-            qesDocumentPreparationService = QesDocumentPreparationService(
-                retriever = { reference -> calls++; fixture.retriever(reference) },
-                preparer = { signatureRequest, bytes -> calls++; fixture.preparer(signatureRequest, bytes) },
-            ),
+            qesDocumentRetriever = { reference -> calls++; fixture.retriever(reference) },
+            qesDtbsrPreparer = { signatureRequest, bytes -> calls++; fixture.preparer(signatureRequest, bytes) },
         ).startAuthorizationResponsePreparation(fixture.sign(request)).getOrThrow()
         calls shouldBe 0
         state.preparedQesDocuments shouldBe emptyList()
@@ -282,9 +276,9 @@ val OpenId4VpQesDocumentPreparationTest by matrixSuite {
             preparer = { request, bytes -> calls++; fixture.preparer(request, bytes) },
         ).getOrThrow()
         calls shouldBe 3
-        state.preparedQesDocuments.shouldNotBeNull().map { it.transactionIndex to it.signatureRequestIndex } shouldBe
+        state.preparedQesDocuments.map { it.transactionIndex to it.signatureRequestIndex } shouldBe
                 listOf(1 to 0, 1 to 1, 2 to 0)
-        state.preparedQesDocuments.shouldNotBeNull().map { it.document.toList() } shouldBe
+        state.preparedQesDocuments.map { it.document.toList() } shouldBe
                 listOf(listOf<Byte>(1), listOf<Byte>(2), listOf<Byte>(1, 2, 3))
     }
 
@@ -310,5 +304,6 @@ private suspend fun QesPreparationFixture.prepareDocuments(
     preparer: QesDtbsrPreparer? = this.preparer,
 ): KmmResult<AuthorizationResponsePreparationState> = OpenId4VpHolder(
     relyingPartyTrust = trust,
-    qesDocumentPreparationService = QesDocumentPreparationService(retriever = retriever, preparer = preparer),
+    qesDocumentRetriever = retriever,
+    qesDtbsrPreparer = preparer,
 ).startAuthorizationResponsePreparation(sign(parameters.copy(transactionData = transactions.map { it.toBase64UrlJsonString() })))

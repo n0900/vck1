@@ -2,16 +2,9 @@ package at.asitplus.wallet.lib.openid
 
 import at.asitplus.KmmResult
 import at.asitplus.catching
-import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
-import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.AuthenticationRequestParameters
 import at.asitplus.openid.OpenIdConstants.VP_TOKEN
 import at.asitplus.openid.VpFormatsSupported
-import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
-import at.asitplus.openid.dcql.DCQLCredentialQueryList
-import at.asitplus.openid.dcql.DCQLCredentialSetQuery
-import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
-import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.signum.indispensable.cosef.CoseAlgorithm
 import at.asitplus.signum.indispensable.cosef.toCoseAlgorithm
@@ -25,9 +18,7 @@ import at.asitplus.wallet.lib.agent.PresentationRequestParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DCQLParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DeviceRetrievalParameters
-import at.asitplus.wallet.lib.agent.SubjectCredentialStore
 import at.asitplus.wallet.lib.data.CredentialPresentation
-import at.asitplus.wallet.lib.data.CredentialPresentationRequest
 import at.asitplus.wallet.lib.extensions.getEncryptionTargetKey
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.*
@@ -42,43 +33,6 @@ internal class PresentationFactory(
         .mapNotNull { it.toJwsAlgorithm().getOrNull() }
     private val supportedCoseAlgorithms = supportedAlgorithms
         .mapNotNull { it.toCoseAlgorithm().getOrNull() }
-
-    companion object {
-        /** Check the combined selection, then let Holder validate and present the ordinary credentials. */
-        fun prepareQesCredentialPresentation(
-            state: AuthorizationResponsePreparationState,
-            submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
-            signingQueryIds: Set<DCQLCredentialQueryIdentifier>,
-        ): CredentialPresentation.DCQLPresentation? {
-            val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
-            if (state.credentialPresentationRequest != CredentialPresentationRequest.DCQLRequest(query))
-                throw InvalidTransactionData("QES preparation does not match the authorization request")
-            val selectedIds = submissions.keys + signingQueryIds
-            if (selectedIds.any { id -> query.credentials.none { it.id == id } })
-                throw InvalidTransactionData("Unknown selected DCQL query")
-            query.checkCredentialSetQueryRequirements(selectedIds).getOrElse {
-                throw InvalidTransactionData("QES selection does not satisfy DCQL credential sets", it)
-            }
-            val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
-            if (submissions.keys.any { id -> ordinary.none { it.id == id } })
-                throw InvalidTransactionData("X.509 requires a signing credential")
-            if (ordinary.isEmpty()) return null
-            return CredentialPresentation.DCQLPresentation(
-                presentationRequest = CredentialPresentationRequest.DCQLRequest(
-                    query.copy(
-                        credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
-                        // The original sets were satisfied by the combined ordinary and signing selection above.
-                        credentialSets = nonEmptyListOf(
-                            DCQLCredentialSetQuery(
-                                options = nonEmptyListOf(ordinary.map { it.id }), required = false,
-                            )
-                        ),
-                    )
-                ),
-                credentialQuerySubmissions = submissions,
-            )
-        }
-    }
 
     suspend fun createPresentation(
         state: AuthorizationResponsePreparationState,

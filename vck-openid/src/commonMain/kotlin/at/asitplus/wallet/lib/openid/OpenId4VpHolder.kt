@@ -10,7 +10,6 @@ import at.asitplus.openid.OpenIdConstants
 import at.asitplus.openid.OpenIdConstants.ClientIdScheme
 import at.asitplus.openid.OpenIdConstants.Errors.INVALID_REQUEST
 import at.asitplus.openid.OpenIdConstants.VP_TOKEN
-import at.asitplus.openid.QesRequest
 import at.asitplus.openid.RelyingPartyMetadata
 import at.asitplus.openid.RequestObjectParameters
 import at.asitplus.openid.RequestParameters
@@ -38,7 +37,6 @@ import at.asitplus.wallet.lib.agent.EphemeralKeyWithoutCert
 import at.asitplus.wallet.lib.agent.Holder
 import at.asitplus.wallet.lib.agent.HolderAgent
 import at.asitplus.wallet.lib.agent.KeyMaterial
-import at.asitplus.wallet.lib.agent.PresentationResponseParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DCQLParameters
 import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DeviceRetrievalParameters
 import at.asitplus.wallet.lib.agent.RandomSource
@@ -52,6 +50,8 @@ import at.asitplus.wallet.lib.oidvci.OAuth2Error
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
+import at.asitplus.wallet.lib.rqes.QesDocumentRetriever
+import at.asitplus.wallet.lib.rqes.QesDtbsrPreparer
 import at.asitplus.wallet.lib.utils.DefaultMapStore
 import at.asitplus.wallet.lib.utils.MapStore
 import com.benasher44.uuid.uuid4
@@ -107,8 +107,10 @@ class OpenId4VpHolder @JvmOverloads constructor(
     private val supportedJweEncryptionAlgorithms: Set<JweEncryption> = JweEncryption.entries.toSet(),
     /** Set to reject a plain request object we have fetched with POST (when RP supports that) */
     private val requireEncryptedRequests: Boolean = false,
-    /** Resolves and prepares QES documents before the application obtains consent. */
-    private val qesDocumentPreparationService: QesDocumentPreparationService? = null,
+    /** Retrieves binary QES documents. Required only for QES document references. */
+    private val qesDocumentRetriever: QesDocumentRetriever? = null,
+    /** Prepares format-specific DTBSRs and reusable context. Required for QES signature requests. */
+    private val qesDtbsrPreparer: QesDtbsrPreparer? = null,
 ) {
 
     init {
@@ -267,8 +269,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
 
     /**
      * Parses the [AuthenticationRequestParameters] from [input] and loads remote objects (client metadata, keys, QES documents).
-     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
-     * or, for QES, [QesSigningService.execute][at.asitplus.wallet.lib.rqes.QesSigningService.execute].
+     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -281,9 +282,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
     /**
      * Validates the [AuthenticationRequestParameters] from [params] and loads remote objects (client metadata, keys).
      * Authenticated QES requests additionally resolve documents, verify checksums, and prepare DTBSRs through
-     * [qesDocumentPreparationService].
-     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse]
-     * or, for QES, [QesSigningService.execute][at.asitplus.wallet.lib.rqes.QesSigningService.execute].
+     * [qesDocumentRetriever] and [qesDtbsrPreparer].
+     * Clients need to inform the user, get consent, and resume in [finalizeAuthorizationResponse].
      *
      * Exceptions thrown during request parsing are caught by [KmmResult],
      */
@@ -291,11 +291,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
         params: RequestParametersFrom<AuthenticationRequestParameters>,
     ): KmmResult<AuthorizationResponsePreparationState> = catching {
         authorizationRequestValidator.validateAuthorizationRequest(params)
-        val transactions = params.parameters.transactionDataDecoded.orEmpty()
-        val preparedQesDocuments = if (transactions.any { it is QesRequest }) {
-            val service = qesDocumentPreparationService ?: throw InvalidRequest("QES requires document preparation")
-            service.prepare(transactions)
-        } else emptyList()
+        val preparedQesDocuments = QesDocumentPreparationService(qesDocumentRetriever, qesDtbsrPreparer)
+            .prepare(params.parameters.transactionDataDecoded.orEmpty())
         val loadedKeys = (params.parameters.clientMetadata?.loadJsonWebKeySet()?.keys
             ?: lookupJsonWebKeysForClient(JsonWebKeyLookupInput(params.parameters.clientId))?.keys)
         val jsonWebKeys = loadedKeys?.combine(params.extractLeafCertKey())
@@ -308,21 +305,6 @@ class OpenId4VpHolder @JvmOverloads constructor(
             audience = params.extractAudience(jsonWebKeys),
             preparedQesDocuments = preparedQesDocuments,
         )
-    }
-
-    /**
-     * Creates credential presentations bound to the prepared request's nonce, audience and transaction data.
-     * Invoke after the application approves the supplied selection. Returns presentation artifacts for further
-     * processing; use [finalizeAuthorizationResponse] to construct a complete OpenID response.
-     */
-    suspend fun createPresentation(
-        preparationState: AuthorizationResponsePreparationState,
-        credentialPresentation: CredentialPresentation,
-    ): KmmResult<PresentationResponseParameters> = catching {
-        presentationFactory.createPresentation(preparationState, holder, credentialPresentation).getOrElse { error ->
-            error.getUserSignatureCancellationException()?.let { throw it }
-            throw error
-        }
     }
 
     /**
@@ -357,13 +339,12 @@ class OpenId4VpHolder @JvmOverloads constructor(
         credentialPresentation: CredentialPresentation? = null,
     ): KmmResult<AuthenticationResponse> = catching {
         with(state) {
-            if (request.parameters.transactionDataDecoded.orEmpty().any { it is QesRequest })
-                throw InvalidRequest("QES requires QesSigningService and subsequent signature result processing")
             val presentation = credentialPresentation ?: credentialPresentationRequest?.toCredentialPresentation()
             val resultContainer = presentation?.let {
-                createPresentation(
-                    preparationState = state,
-                    credentialPresentation = presentation,
+                presentationFactory.createPresentation(
+                    state = state,
+                    holder = holder,
+                    credentialPresentation = presentation
                 ).getOrThrow()
             }
 

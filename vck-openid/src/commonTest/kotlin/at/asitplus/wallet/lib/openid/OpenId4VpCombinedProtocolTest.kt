@@ -13,7 +13,6 @@ package at.asitplus.wallet.lib.openid
  */
 
 import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
-import at.asitplus.openid.AuthenticationResponseParameters
 import at.asitplus.openid.dcql.DCQLClaimsPathPointer
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
 import at.asitplus.openid.dcql.DCQLCredentialQueryList
@@ -22,7 +21,6 @@ import at.asitplus.openid.dcql.DCQLIsoMdocZkCredentialQuery
 import at.asitplus.openid.dcql.DCQLJwtVcCredentialQuery
 import at.asitplus.openid.dcql.DCQLSdJwtCredentialQuery
 import at.asitplus.openid.dcql.DCQLX509CredentialQuery
-import at.asitplus.signum.indispensable.SignatureAlgorithm
 import at.asitplus.testballoon.matrix.fixture
 import at.asitplus.testballoon.matrix.matrixSuite
 import at.asitplus.wallet.eupidsdjwt.EU_PID_SD_JWT_VCT
@@ -33,7 +31,6 @@ import at.asitplus.wallet.lib.agent.EphemeralKeyWithoutCert
 import at.asitplus.wallet.lib.agent.Holder
 import at.asitplus.wallet.lib.agent.HolderAgent
 import at.asitplus.wallet.lib.agent.KeyMaterial
-import at.asitplus.wallet.lib.agent.PresentationResponseParameters.DCQLParameters
 import at.asitplus.wallet.lib.agent.RandomSource
 import at.asitplus.wallet.lib.agent.SubjectCredentialStore
 import at.asitplus.wallet.lib.agent.Verifier
@@ -44,7 +41,6 @@ import at.asitplus.wallet.lib.data.ConstantIndex.AtomicAttribute2023.CLAIM_DATE_
 import at.asitplus.wallet.lib.data.ConstantIndex.CredentialRepresentation.*
 import at.asitplus.wallet.lib.data.CredentialPresentation
 import at.asitplus.wallet.lib.data.CredentialPresentationRequest
-import at.asitplus.wallet.lib.jws.EncryptJwe
 import at.asitplus.wallet.lib.openid.DummyCredentialDataProvider.issueAndStoreIsoMdoc
 import at.asitplus.wallet.lib.openid.DummyCredentialDataProvider.issueAndStorePlainJwt
 import at.asitplus.wallet.lib.openid.DummyCredentialDataProvider.issueAndStoreSdJwt
@@ -319,7 +315,7 @@ val OpenId4VpCombinedProtocolTest by matrixSuite {
             authnResponse.error.shouldNotBeNull()
         }
 
-        "mdoc dcql: rejects incorrect credentials at holder and verifier" {
+        "mdoc dcql: presenting incorrect credentials yields invalid submission validation result" {
             issueAndStorePlainJwt(it.holderAgent, it.holderKeyMaterial, ConstantIndex.AtomicAttribute2023)
             issueAndStoreSdJwt(it.holderAgent, it.holderKeyMaterial, ConstantIndex.AtomicAttribute2023)
             issueAndStoreIsoMdoc(it.holderAgent, it.holderKeyMaterial, ConstantIndex.AtomicAttribute2023)
@@ -375,24 +371,7 @@ val OpenId4VpCombinedProtocolTest by matrixSuite {
             ).getOrThrow()
                 .shouldBeInstanceOf<AuthenticationResponseResult.Redirect>()
 
-            authnResponse.error.shouldNotBeNull()
-
-            // Deliberately construct an SD-JWT response to the mdoc request to exercise verifier validation.
-            val wrongFormatPresentation = PresentationFactory(setOf(SignatureAlgorithm.ECDSAwithSHA256))
-                .createPresentation(
-                    preparationState,
-                    it.holderAgent,
-                    CredentialPresentation.DCQLPresentation(otherQueryWithOriginalIds, badMatches),
-                ).getOrThrow().shouldBeInstanceOf<DCQLParameters>()
-            val wrongFormatResponse = AuthenticationResponseFactory(EncryptJwe()).createAuthenticationResponse(
-                preparationState,
-                AuthenticationResponse.Success(AuthenticationResponseParameters(
-                    state = preparationState.request.parameters.state,
-                    vpToken = wrongFormatPresentation.vpToken,
-                )),
-            ).shouldBeInstanceOf<AuthenticationResponseResult.Redirect>()
-
-            it.verifierOid4vp.validateAuthnResponse(wrongFormatResponse.url).getOrThrow()
+            it.verifierOid4vp.validateAuthnResponse(authnResponse.url).getOrThrow()
                 .vpTokenValidationResult.shouldNotBeNull().getOrThrow()
                 .shouldBeInstanceOf<VpTokenValidationResultDCQL>()
                 .submissionRequirementsValidationResult.isSuccess.shouldBeFalse()

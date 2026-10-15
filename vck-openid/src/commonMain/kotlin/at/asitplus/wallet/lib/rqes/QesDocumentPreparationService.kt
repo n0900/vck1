@@ -12,7 +12,7 @@ import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 
 /** ETSI TS 119 432 Annex A.7.3 step 2; invoke only after request authentication and validation. */
-class QesDocumentPreparationService(
+internal class QesDocumentPreparationService(
     private val retriever: QesDocumentRetriever?,
     private val preparer: QesDtbsrPreparer?,
 ) {
