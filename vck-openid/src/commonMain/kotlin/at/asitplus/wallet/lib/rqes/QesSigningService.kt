@@ -7,14 +7,9 @@ import at.asitplus.csc.api.collection_entries.CertificateParameters
 import at.asitplus.csc.api.collection_entries.KeyParameters
 import at.asitplus.csc.bindings.QesSignatureRequest
 import at.asitplus.csc.datamodel.basic.SigningAlgorithm
-import at.asitplus.data.NonEmptyList.Companion.nonEmptyListOf
-import at.asitplus.data.NonEmptyList.Companion.toNonEmptyList
 import at.asitplus.openid.QesRequest
 import at.asitplus.openid.TransactionData
 import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
-import at.asitplus.openid.dcql.DCQLCredentialQueryList
-import at.asitplus.openid.dcql.DCQLCredentialSetQuery
-import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.openid.dcql.DCQLQuery
 import at.asitplus.openid.dcql.DCQLX509CredentialQuery
 import at.asitplus.openid.dcql.X509MetadataQuery
@@ -26,14 +21,10 @@ import at.asitplus.signum.indispensable.asn1.encoding.parse
 import at.asitplus.signum.indispensable.asn1.readOid
 import at.asitplus.signum.indispensable.pki.X509Certificate
 import at.asitplus.signum.supreme.hash.digest
-import at.asitplus.wallet.lib.agent.SubjectCredentialStore.StoreEntry
-import at.asitplus.wallet.lib.data.CredentialPresentation
-import at.asitplus.wallet.lib.data.CredentialPresentationRequest
 import at.asitplus.wallet.lib.etsi.isValidAt
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
 import at.asitplus.wallet.lib.openid.AuthorizationResponsePreparationState
-import at.asitplus.wallet.lib.procedures.dcql.DCQLQueryAdapter
 import kotlin.io.encoding.Base64
 
 /** Local correlation and routing state; only [request] crosses the CSC callback boundary. */
@@ -44,17 +35,15 @@ internal data class QesSigningOperation(
     val signHash: QesQtspSigner,
 )
 
-/** Validates the whole operation before any signing side effects. State must come from request preparation. */
+/** Validates signing credentials and prepared documents before invoking CSC signHash. */
 internal class QesSigningService {
-    suspend fun validate(
+    fun validate(
         state: AuthorizationResponsePreparationState,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
         credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         choices: List<QesDocumentSigningChoice>,
     ): List<QesSigningOperation> = catching {
-        val query = requireDcqlQuery(state)
-        validateCredentialSelections(query, submissions, credentials)
-        validateOrdinarySubmissions(query, submissions)
+        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
+        validateSigningCredentials(query, credentials)
 
         val transactions = state.request.parameters.transactionDataDecoded.orEmpty()
         val selections = resolveDocumentChoices(transactions, state.preparedQesDocuments, choices)
@@ -72,50 +61,14 @@ internal class QesSigningService {
         else throw InvalidTransactionData("Invalid QES signing selection", it)
     }
 
-    private fun requireDcqlQuery(state: AuthorizationResponsePreparationState): DCQLQuery {
-        val query = state.request.parameters.dcqlQuery ?: throw InvalidRequest("QES requires DCQL")
-        require(state.credentialPresentationRequest == CredentialPresentationRequest.DCQLRequest(query)) {
-            "QES preparation does not match the authorization request"
-        }
-        return query
-    }
-
-    private fun validateCredentialSelections(
+    private fun validateSigningCredentials(
         query: DCQLQuery,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
         credentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
     ) {
-        val selectedIds = submissions.keys + credentials.keys
-        require(selectedIds.all { id -> query.credentials.any { it.id == id } }) { "Unknown selected DCQL query" }
-        query.checkCredentialSetQueryRequirements(selectedIds).getOrThrow()
-        require(submissions.values.all { it.isNotEmpty() }) { "Empty ordinary credential submission" }
-        submissions.forEach { (id, selected) ->
-            val credentialQuery = query.credentials.first { it.id == id }
-            require(credentialQuery !is DCQLX509CredentialQuery) { "X.509 requires a signing credential" }
-            require(credentialQuery.multiple || selected.size == 1) { "Multiple submissions are not permitted" }
-        }
         credentials.forEach { (id, credential) ->
-            val credentialQuery = query.credentials.first { it.id == id } as? DCQLX509CredentialQuery
+            val credentialQuery = query.credentials.firstOrNull { it.id == id } as? DCQLX509CredentialQuery
                 ?: throw InvalidTransactionData("Signing selection must reference an X.509 query")
             validateCredential(credentialQuery, credential)
-        }
-    }
-
-    private suspend fun validateOrdinarySubmissions(
-        query: DCQLQuery,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
-    ) {
-        // Match explicit ordinary submissions again, so caller-supplied matching results cannot bypass DCQL.
-        ordinaryPresentation(query, submissions)?.let { presentation ->
-            val selected = submissions.values.flatten().map { it.credential }.distinct()
-            val matches = DCQLQueryAdapter(presentation.presentationRequest.dcqlQuery).select(selected)
-            submissions.forEach { (id, options) ->
-                options.forEach { option ->
-                    require(matches.credentialQueryMatches[id].orEmpty().any { (index, matching) ->
-                        selected[index.toInt()] == option.credential && matching == option.matchingResult
-                    }) { "Ordinary submission does not match DCQL query ${id.string}" }
-                }
-            }
         }
     }
 
@@ -226,27 +179,6 @@ internal class QesSigningService {
                 is SignatureAlgorithm.RSA -> key is CryptoPublicKey.RSA
             }
         ) { "Signing algorithm is incompatible with the certificate key" }
-    }
-
-    /** Validate the full query first; this projection only creates the ordinary credential artifacts. */
-    fun ordinaryPresentation(
-        query: DCQLQuery,
-        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<StoreEntry>>>,
-    ): CredentialPresentation.DCQLPresentation? {
-        val ordinary = query.credentials.filter { it !is DCQLX509CredentialQuery }
-        if (ordinary.isEmpty()) return null
-        val ordinaryQuery = DCQLQuery(
-            credentials = DCQLCredentialQueryList(ordinary.toNonEmptyList()),
-            // The original requirements were checked against the complete selection above.
-            credentialSets = nonEmptyListOf(DCQLCredentialSetQuery(
-                options = nonEmptyListOf(ordinary.map { it.id }),
-                required = false,
-            )),
-        )
-        return CredentialPresentation.DCQLPresentation(
-            presentationRequest = CredentialPresentationRequest.DCQLRequest(ordinaryQuery),
-            credentialQuerySubmissions = submissions,
-        )
     }
 
     fun validateResponse(response: SignHashResponseParameters) {

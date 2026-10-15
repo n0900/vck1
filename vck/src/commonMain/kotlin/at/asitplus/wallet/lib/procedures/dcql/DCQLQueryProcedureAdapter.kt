@@ -16,7 +16,16 @@ package at.asitplus.wallet.lib.procedures.dcql
  * see the "LICENSE" file for more details
  */
 
+import at.asitplus.KmmResult
+import at.asitplus.catching
 import at.asitplus.openid.dcql.DCQLAuthorityKeyIdentifier
+import at.asitplus.openid.dcql.DCQLCredential
+import at.asitplus.openid.dcql.DCQLCredentialQuery
+import at.asitplus.openid.dcql.DCQLCredentialQueryIdentifier
+import at.asitplus.openid.dcql.DCQLCredentialQueryMatchingResult
+import at.asitplus.openid.dcql.DCQLCredentialQueryMatchingResult.AllClaimsMatchingResult
+import at.asitplus.openid.dcql.DCQLCredentialQueryMatchingResult.ClaimsQueryResults
+import at.asitplus.openid.dcql.DCQLCredentialSubmissionOption
 import at.asitplus.openid.dcql.DCQLCredentialClaimStructure
 import at.asitplus.openid.dcql.DCQLIsoMdocCredential
 import at.asitplus.openid.dcql.DCQLQuery
@@ -54,6 +63,48 @@ value class DCQLQueryAdapter(val dcqlQuery: DCQLQuery) {
             it.toDCQLCredential()
         }
     )
+
+    /** Checks explicit holder selections before any presentation signatures are created. */
+    internal suspend fun validateSubmission(
+        submissions: Map<DCQLCredentialQueryIdentifier, List<DCQLCredentialSubmissionOption<SubjectCredentialStore.StoreEntry>>>,
+    ): KmmResult<Unit> = catching {
+        dcqlQuery.checkCredentialSetQueryRequirements(submissions.keys).getOrThrow()
+        submissions.forEach { (id, selected) ->
+            val query = dcqlQuery.credentials.firstOrNull { it.id == id }
+                ?: throw IllegalArgumentException("Unknown credential query ${id.string}")
+            require(selected.isNotEmpty()) { "Empty credential submission for ${id.string}" }
+            require(query.multiple || selected.size == 1) { "Multiple submissions are not permitted for ${id.string}" }
+            selected.forEach { submission ->
+                val credential = submission.credential.toDCQLCredential()
+                val preferred = query.match(credential).getOrElse {
+                    throw IllegalArgumentException("Credential does not match query ${id.string}", it)
+                }
+                require(matchesDisclosures(query, credential, preferred, submission.matchingResult)) {
+                    "Disclosures do not match credential query ${id.string}"
+                }
+            }
+        }
+    }
+
+    private fun matchesDisclosures(
+        query: DCQLCredentialQuery,
+        credential: DCQLCredential,
+        preferred: DCQLCredentialQueryMatchingResult,
+        submitted: DCQLCredentialQueryMatchingResult,
+    ): Boolean {
+        if (submitted == preferred) return true
+        if (!credential.isSelectivelyDisclosable && submitted == AllClaimsMatchingResult) return true
+        if (submitted !is ClaimsQueryResults) return false
+        // A caller may choose another valid claim_set instead of the matcher's preferred option.
+        val claims = query.claims.orEmpty().associateBy { it.id }
+        return query.claimSets.orEmpty().any { claimSet ->
+            catching {
+                ClaimsQueryResults(claimSet.map { id ->
+                    claims.getValue(id).executeClaimsQueryAgainstCredential(credential.claimStructure).getOrThrow()
+                })
+            }.getOrNull() == submitted
+        }
+    }
 
     fun checkSubmissionRequirements(
         queryResponse: DCQLQueryResponse<VerifyPresentationResult>,
