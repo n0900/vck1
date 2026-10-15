@@ -53,11 +53,12 @@ import at.asitplus.wallet.lib.oidvci.OAuth2Error
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidRequest
 import at.asitplus.wallet.lib.oidvci.OAuth2Exception.InvalidTransactionData
+import at.asitplus.wallet.lib.rqes.QesDocumentPreparationService
 import at.asitplus.wallet.lib.rqes.QesDocumentSigningChoice
 import at.asitplus.wallet.lib.rqes.QesDocumentSigningResult
 import at.asitplus.wallet.lib.rqes.QesSigningCredential
 import at.asitplus.wallet.lib.rqes.QesSigningResult
-import at.asitplus.wallet.lib.rqes.QesSigningService
+import at.asitplus.wallet.lib.rqes.QesValidationService
 import at.asitplus.wallet.lib.utils.DefaultMapStore
 import at.asitplus.wallet.lib.utils.MapStore
 import com.benasher44.uuid.uuid4
@@ -113,7 +114,8 @@ class OpenId4VpHolder @JvmOverloads constructor(
     private val supportedJweEncryptionAlgorithms: Set<JweEncryption> = JweEncryption.entries.toSet(),
     /** Set to reject a plain request object we have fetched with POST (when RP supports that) */
     private val requireEncryptedRequests: Boolean = false,
-    private val qesSigningService: QesSigningService
+    private val qesDocumentPreparationService: QesDocumentPreparationService,
+    private val qesValidationService: QesValidationService
 ) {
 
     init {
@@ -296,7 +298,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
         params: RequestParametersFrom<AuthenticationRequestParameters>,
     ): KmmResult<AuthorizationResponsePreparationState> = catching {
         authorizationRequestValidator.validateAuthorizationRequest(params)
-        val preparedQesDocuments = qesSigningService.qesDocumentPreparationService
+        val preparedQesDocuments = qesDocumentPreparationService
             .prepare(params.parameters.transactionDataDecoded.orEmpty())
         val loadedKeys = (params.parameters.clientMetadata?.loadJsonWebKeySet()?.keys
             ?: lookupJsonWebKeysForClient(JsonWebKeyLookupInput(params.parameters.clientId))?.keys)
@@ -329,10 +331,10 @@ class OpenId4VpHolder @JvmOverloads constructor(
         signingCredentials: Map<DCQLCredentialQueryIdentifier, QesSigningCredential>,
         signingChoices: List<QesDocumentSigningChoice>,
     ): KmmResult<QesSigningResult> = catching {
-        val ordinaryPresentation = qesSigningService.prepareQesCredentialPresentation(
+        val ordinaryPresentation = qesDocumentPreparationService.prepareQesCredentialPresentation(
             preparationState, credentialSubmissions, signingCredentials.keys,
         )
-        val operations = qesSigningService.validate(preparationState, signingCredentials, signingChoices)
+        val operations = qesValidationService.validate(preparationState, signingCredentials, signingChoices)
         val presentations = ordinaryPresentation?.let {
             presentationFactory.createPresentation(preparationState, holder, it).getOrElse { error ->
                 error.getUserSignatureCancellationException()?.let { throw it }
@@ -343,7 +345,7 @@ class OpenId4VpHolder @JvmOverloads constructor(
         } ?: DCQLParameters(emptyMap())
         val results = operations.map { operation ->
             val response = operation.signHash(operation.request).getOrThrow()
-            qesSigningService.validateResponse(response)
+            qesValidationService.validateResponse(response)
             QesDocumentSigningResult(
                 credentialQueryId = operation.credentialQueryId,
                 preparedDocument = operation.preparedDocument,
