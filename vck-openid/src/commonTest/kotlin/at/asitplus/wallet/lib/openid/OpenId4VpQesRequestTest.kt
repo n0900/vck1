@@ -411,8 +411,8 @@ internal class QesPreparationFixture {
     val trust = setOf(RelyingPartyTrust.PreRegisteredClients { clientId ->
         if (clientId == CLIENT_ID) setOf(signer.jsonWebKey) else null
     })
-    val retriever: QesDocumentRetriever = { catching { byteArrayOf(1, 2, 3) } }
-    val preparer: QesDtbsrPreparer = { _, bytes ->
+    val retriever = QesDocumentRetriever { catching { byteArrayOf(1, 2, 3) } }
+    val preparer = QesDtbsrPreparer { _, bytes ->
         catching { QesDocumentPreparation(Hash(bytes.sha256(), Digest.SHA256.oid)) }
     }
     val holder = OpenId4VpHolder(

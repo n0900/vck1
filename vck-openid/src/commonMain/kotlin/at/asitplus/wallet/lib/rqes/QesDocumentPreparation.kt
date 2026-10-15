@@ -13,14 +13,18 @@ import kotlin.jvm.JvmOverloads
  * Implementations own HTTP, authentication, redirects, and resource-size/media-type restrictions.
  * The wallet verifies [DocumentReference.checksum] after retrieval.
  */
-typealias QesDocumentRetriever = suspend (DocumentReference) -> KmmResult<ByteArray>
+fun interface QesDocumentRetriever {
+    suspend operator fun invoke(reference: DocumentReference): KmmResult<ByteArray>
+}
 
 /**
  * Prepares a format-specific DTBSR from resolved document bytes and the complete signing request.
  * Implementations own format handling (e.g. PAdES ByteRange), algorithm selection consistent with the request,
  * and preparation context for later signature embedding. The input bytes may be modified by the implementation.
  */
-typealias QesDtbsrPreparer = suspend (QesSignatureRequest, ByteArray) -> KmmResult<QesDocumentPreparation>
+fun interface QesDtbsrPreparer {
+    suspend operator fun invoke(request: QesSignatureRequest, document: ByteArray): KmmResult<QesDocumentPreparation>
+}
 
 /** Result of external document preparation; this is wallet state, not a CSC wire object. */
 @Serializable
