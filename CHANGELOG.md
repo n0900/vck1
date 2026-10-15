@@ -4,13 +4,14 @@ Release 9.0.0 (unreleased):
 - ETSI TS 119 432 Annex A (QES):
     - Add request-side X.509 DCQL support (A.6)
     - Implement request preparation (A.7.3 step 1): require signed requests and RP trust, validate X.509 references, and retain original transaction data
-    - Dispatch QES requests explicitly and authenticate the RP before transaction validation
+    - Dispatch QES from X.509 queries and authenticate the RP before decoding transaction data
     - Bind approvals to selected DCQL submissions; treat `credential_ids` as alternatives and reject invalid references with `invalid_transaction_data`
     - Add `PresentationRequestParameters.qesApprovalTransactionData` for independent approval selection
 - OpenID for Verifiable Presentations:
     - Consume `wallet_nonce` at the start of every validation attempt
     - Reject JAR `client_id` mismatches
     - Move `Base64URLTransactionDataSerializer` to `openid-data-classes`
+    - Deprecate legacy D3.1/WP3 transaction types `QCertCreationAcceptance` and `QesAuthorization`
 - CSC data classes:
     - BREAKING: Move CSC API to `api`; add the `datamodel` package
     - Implement CSC Data Model 1.0.0

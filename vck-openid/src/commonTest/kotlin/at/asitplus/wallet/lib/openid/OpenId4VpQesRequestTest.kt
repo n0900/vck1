@@ -21,8 +21,8 @@ import at.asitplus.wallet.lib.RemoteResourceRetrieverInput
 import at.asitplus.wallet.lib.agent.EphemeralKeyWithoutCert
 import at.asitplus.wallet.lib.agent.KeyMaterial
 import at.asitplus.wallet.lib.agent.TestCertificateAuthority
-import at.asitplus.wallet.lib.data.MediaTypes
 import at.asitplus.wallet.lib.data.CredentialPresentationRequest
+import at.asitplus.wallet.lib.data.MediaTypes
 import at.asitplus.wallet.lib.jws.JwsContentTypeConstants
 import at.asitplus.wallet.lib.jws.JwsHeaderCertOrJwk
 import at.asitplus.wallet.lib.jws.SignJwt
@@ -39,12 +39,18 @@ import io.matthewnelson.encoding.core.Encoder.Companion.encodeToString
 import kotlinx.serialization.json.JsonPrimitive
 
 val OpenId4VpQesRequestTest by matrixSuite {
-    listOf("direct", "request", "request_uri", "request_uri_post")
-        .asData(nameFn = { "resolves a trusted QES JAR via $it" }) test { transport ->
+    listOf(
+        "direct",
+        "request",
+        "request_uri",
+        "request_uri_post"
+    ).asData(nameFn = { "resolves a trusted QES JAR via $it" }) test { transport ->
         val fixture = QesPreparationFixture()
         // Keep a non-canonical JSON encoding to prove the original transaction bytes survive verification.
-        val transaction = (" \n" + joseCompliantSerializer.encodeToString(TransactionData.serializer(), fixture.transaction))
-            .encodeToByteArray().encodeToString(Base64UrlStrict)
+        val transaction = (" \n" + joseCompliantSerializer.encodeToString(
+            TransactionData.serializer(),
+            fixture.transaction
+        )).encodeToByteArray().encodeToString(Base64UrlStrict)
         val parameters = fixture.parameters.copy(transactionData = listOf(JsonPrimitive(transaction)))
         val jar = fixture.sign(parameters)
         var fetched: RemoteResourceRetrieverInput? = null
@@ -67,8 +73,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
         }
         val resolved = holder.startAuthorizationResponsePreparation(input).getOrThrow()
         resolved.request.parameters shouldBe expectedParameters
-        resolved.credentialPresentationRequest.shouldBeInstanceOf<CredentialPresentationRequest.DCQLRequest>()
-            .dcqlQuery shouldBe parameters.dcqlQuery
+        resolved.credentialPresentationRequest.shouldBeInstanceOf<CredentialPresentationRequest.DCQLRequest>().dcqlQuery shouldBe parameters.dcqlQuery
         resolved.request.parameters.transactionDataDecoded shouldBe listOf(fixture.transaction)
         resolved.request.parameters.transactionData!!.single().content shouldBe transaction
         resolved.request.shouldBeInstanceOf<RequestParametersFrom.Jws<*>>().jws.toString() shouldBe returnedJar
@@ -88,19 +93,23 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val hash = signer.getCertificate()!!.encodeToDer().sha256().encodeToString(Base64UrlStrict)
         val request = fixture.parameters.copy(clientId = "x509_hash:$hash")
         val jar = fixture.sign(request, signer)
-        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(ca.certificate) }))
-            .startAuthorizationResponsePreparation(jar).getOrThrow().request.parameters shouldBe request
-        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(TestCertificateAuthority().certificate) }))
-            .startAuthorizationResponsePreparation(jar).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(ca.certificate) })).startAuthorizationResponsePreparation(
+                jar
+            ).getOrThrow().request.parameters shouldBe request
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.Certificates { setOf(TestCertificateAuthority().certificate) })).startAuthorizationResponsePreparation(
+                jar
+            ).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
     }
 
     "requires configured relying-party trust" {
         val fixture = QesPreparationFixture()
-        OpenId4VpHolder().startAuthorizationResponsePreparation(fixture.sign()).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
-        OpenId4VpHolder(relyingPartyTrust = emptySet())
-            .startAuthorizationResponsePreparation(fixture.sign()).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
-        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { null }))
-            .startAuthorizationResponsePreparation(fixture.sign()).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        OpenId4VpHolder().startAuthorizationResponsePreparation(fixture.sign()).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>()
+        OpenId4VpHolder(relyingPartyTrust = emptySet()).startAuthorizationResponsePreparation(fixture.sign())
+            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { null })).startAuthorizationResponsePreparation(
+                fixture.sign()
+            ).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
     }
 
     "the parsed-request overload validates QES and retains the same preparation state" {
@@ -110,9 +119,11 @@ val OpenId4VpQesRequestTest by matrixSuite {
             parameters = fixture.parameters,
         )
         fixture.holder.startAuthorizationResponsePreparation(request).getOrThrow().request shouldBe request
-        fixture.holder.startAuthorizationResponsePreparation(request.copy(
-            parameters = fixture.parameters.copy(nonce = "changed-after-signing"),
-        )).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        fixture.holder.startAuthorizationResponsePreparation(
+            request.copy(
+                parameters = fixture.parameters.copy(nonce = "changed-after-signing"),
+            )
+        ).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
     }
 
     "ordinary presentations keep their existing optional-trust behavior" {
@@ -149,34 +160,69 @@ val OpenId4VpQesRequestTest by matrixSuite {
             .getOrThrow().request.parameters shouldBe request
     }
 
-    listOf("empty credential_ids", "unknown query", "empty signatureRequests", "missing transaction_data", "state")
-        .asData(nameFn = { "authenticates the RP before rejecting $it" }) test { invalid ->
+    listOf(
+        "empty credential_ids", "unknown query", "empty signatureRequests", "missing transaction_data", "state",
+        "malformed base64", "invalid JSON", "unknown transaction type",
+    ).asData(nameFn = { "authenticates the RP before rejecting $it" }) test { invalid ->
         val fixture = QesPreparationFixture()
         val request = fixture.parameters.copy(
             state = if (invalid == "state") null else fixture.parameters.state,
             transactionData = when (invalid) {
-                "empty credential_ids" -> listOf(fixture.transaction.copy(credentialIds = emptySet()).toBase64UrlJsonString())
-                "unknown query" -> listOf(fixture.transaction.copy(credentialIds = setOf("unknown")).toBase64UrlJsonString())
-                "empty signatureRequests" -> listOf(fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString())
+                "empty credential_ids" -> listOf(
+                    fixture.transaction.copy(credentialIds = emptySet()).toBase64UrlJsonString()
+                )
+
+                "unknown query" -> listOf(
+                    fixture.transaction.copy(credentialIds = setOf("unknown")).toBase64UrlJsonString()
+                )
+
+                "empty signatureRequests" -> listOf(
+                    fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString()
+                )
+
                 "missing transaction_data" -> null
+                "malformed base64" -> listOf(JsonPrimitive("!"))
+                "invalid JSON" -> listOf(JsonPrimitive("{".encodeToByteArray().encodeToString(Base64UrlStrict)))
+                "unknown transaction type" -> listOf(
+                    JsonPrimitive(
+                        """{"type":"unknown","credential_ids":["certificate"]}""".encodeToByteArray()
+                            .encodeToString(Base64UrlStrict),
+                    )
+                )
+
                 else -> fixture.parameters.transactionData
             },
         )
         fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request, EphemeralKeyWithoutCert()))
-            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
-            .message.shouldNotBeNull() shouldContain "request object not signed by a key registered for this client_id"
-        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { null }))
-            .startAuthorizationResponsePreparation(fixture.sign(request))
-            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
-            .message.shouldNotBeNull() shouldContain "not a pre-registered relying party"
-        val authenticatedFailure = fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull()
-        if (invalid == "state") authenticatedFailure.shouldBeInstanceOf<InvalidRequest>()
-            .message.shouldNotBeNull() shouldContain "nonce and state"
+            .exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "request object not signed by a key registered for this client_id"
+        OpenId4VpHolder(relyingPartyTrust = setOf(RelyingPartyTrust.PreRegisteredClients { null })).startAuthorizationResponsePreparation(
+                fixture.sign(request)
+            ).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "not a pre-registered relying party"
+        val authenticatedFailure =
+            fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull()
+        if (invalid == "state") authenticatedFailure.shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "nonce and state"
         else authenticatedFailure.shouldBeInstanceOf<InvalidTransactionData>()
     }
 
-    listOf("valid", "bad signature", "bad transaction", "bad typ", "malformed transaction")
-        .asData(nameFn = { "consumes wallet_nonce at entry for a $it request and rejects its replay" }) test { outcome ->
+    "X.509 dispatch requires signed requests and configured trust before decoding transaction data" {
+        val fixture = QesPreparationFixture()
+        val request = fixture.parameters.copy(transactionData = listOf(JsonPrimitive("!")))
+        fixture.holder.startAuthorizationResponsePreparation(joseCompliantSerializer.encodeToString(request))
+            .exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "QES requires a signed"
+        OpenId4VpHolder().startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "QES requires configured relying-party trust"
+    }
+
+    listOf(
+        "valid",
+        "bad signature",
+        "bad transaction",
+        "bad typ",
+        "malformed transaction"
+    ).asData(nameFn = { "consumes wallet_nonce at entry for a $it request and rejects its replay" }) test { outcome ->
         val fixture = QesPreparationFixture()
         val walletNonce = "single-attempt-nonce"
         val nonceStore = DefaultMapStore<String, String>()
@@ -193,31 +239,37 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val parameters = fixture.parameters.copy(
             walletNonce = walletNonce,
             transactionData = when (outcome) {
-                "bad transaction" -> listOf(fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString())
+                "bad transaction" -> listOf(
+                    fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString()
+                )
+
                 "malformed transaction" -> listOf(JsonPrimitive("!"))
                 else -> fixture.parameters.transactionData
             },
         )
         val request = RequestParametersFrom.Jws(
-            jws = JwsCompact(fixture.sign(
-                payload = parameters,
-                keyMaterial = if (outcome == "bad signature") EphemeralKeyWithoutCert() else fixture.signer,
-                typ = if (outcome == "bad typ") "JWT" else JwsContentTypeConstants.OAUTH_AUTHZ_REQUEST,
-            )),
+            jws = JwsCompact(
+                fixture.sign(
+                    payload = parameters,
+                    keyMaterial = if (outcome == "bad signature") EphemeralKeyWithoutCert() else fixture.signer,
+                    typ = if (outcome == "bad typ") "JWT" else JwsContentTypeConstants.OAUTH_AUTHZ_REQUEST,
+                )
+            ),
             parameters = parameters,
         )
         val result = holder.startAuthorizationResponsePreparation(request)
         when (outcome) {
             "valid" -> result.getOrThrow().request shouldBe request
-            "bad transaction", "malformed transaction" -> result.exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
+            "bad transaction", "malformed transaction" -> result.exceptionOrNull()
+                .shouldBeInstanceOf<InvalidTransactionData>()
+
             else -> result.exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
         }
         nonceStore.get(walletNonce) shouldBe null
-        val expectedLookups = if (outcome == "bad typ" || outcome == "malformed transaction") 0 else 1
+        val expectedLookups = if (outcome == "bad typ") 0 else 1
         lookups shouldBe expectedLookups
-        holder.startAuthorizationResponsePreparation(request)
-            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
-            .message.shouldNotBeNull() shouldContain "wallet_nonce from request not known to us"
+        holder.startAuthorizationResponsePreparation(request).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>().message.shouldNotBeNull() shouldContain "wallet_nonce from request not known to us"
         lookups shouldBe expectedLookups
     }
 
@@ -232,19 +284,19 @@ val OpenId4VpQesRequestTest by matrixSuite {
         val segments = fixture.sign().split('.').toMutableList()
         if (part == "payload") {
             segments[1] = segments[1].decodeToByteArray(Base64UrlStrict).decodeToString()
-                .replace("\"nonce\":\"nonce\"", "\"nonce\":\"tampered\"")
-                .encodeToByteArray().encodeToString(Base64UrlStrict)
+                .replace("\"nonce\":\"nonce\"", "\"nonce\":\"tampered\"").encodeToByteArray()
+                .encodeToString(Base64UrlStrict)
         } else {
             segments[2] = segments[2].decodeToByteArray(Base64UrlStrict).also {
                 it[0] = (it[0].toInt() xor 1).toByte()
             }.encodeToString(Base64UrlStrict)
         }
-        fixture.holder.startAuthorizationResponsePreparation(segments.joinToString("."))
-            .exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        fixture.holder.startAuthorizationResponsePreparation(segments.joinToString(".")).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidRequest>()
     }
 
-    listOf("json", "url", "plain request_uri", "unavailable request_uri", "wrong typ", "mismatched client_id")
-        .asData(nameFn = { "rejects $it" }) test { invalid ->
+    listOf("json", "url", "plain request_uri", "unavailable request_uri", "wrong typ", "mismatched client_id").asData(
+            nameFn = { "rejects $it" }) test { invalid ->
         val fixture = QesPreparationFixture()
         val json = joseCompliantSerializer.encodeToString(fixture.parameters)
         val holder = OpenId4VpHolder(
@@ -256,6 +308,7 @@ val OpenId4VpQesRequestTest by matrixSuite {
             "url" -> URLBuilder("openid4vp://authorize").apply {
                 fixture.parameters.encodeToParameters().forEach { parameters.append(it.key, it.value) }
             }.buildString()
+
             "wrong typ" -> fixture.sign(typ = "JWT")
             "mismatched client_id" -> fixture.invocation(request = fixture.sign(), clientId = "another-client")
             else -> fixture.invocation()
@@ -263,8 +316,16 @@ val OpenId4VpQesRequestTest by matrixSuite {
         holder.startAuthorizationResponsePreparation(input).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
     }
 
-    listOf("nonce", "state", "dcql_query", "response_type", "response_mode", "client_id", "redirect_uri scheme", "custom scheme")
-        .asData(nameFn = { "rejects invalid QES authorization parameter: $it" }) test { invalid ->
+    listOf(
+        "nonce",
+        "state",
+        "dcql_query",
+        "response_type",
+        "response_mode",
+        "client_id",
+        "redirect_uri scheme",
+        "custom scheme"
+    ).asData(nameFn = { "rejects invalid QES authorization parameter: $it" }) test { invalid ->
         val fixture = QesPreparationFixture()
         val request = fixture.parameters.let {
             when (invalid) {
@@ -279,22 +340,45 @@ val OpenId4VpQesRequestTest by matrixSuite {
             }
         }
         // A permissive custom trust callback must not bypass the holder's signature verification requirement.
-        OpenId4VpHolder(relyingPartyTrust = fixture.trust + RelyingPartyTrust.Custom { })
-            .startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
+        OpenId4VpHolder(relyingPartyTrust = fixture.trust + RelyingPartyTrust.Custom { }).startAuthorizationResponsePreparation(
+                fixture.sign(request)
+            ).exceptionOrNull().shouldBeInstanceOf<InvalidRequest>()
     }
 
-    listOf("missing", "empty", "malformed", "unknown type", "empty credential_ids", "unknown query", "non-X.509 query", "empty signatureRequests")
-        .asData(nameFn = { "rejects invalid QES transaction data: $it" }) test { invalid ->
+    listOf(
+        "missing",
+        "empty",
+        "malformed",
+        "unknown type",
+        "empty credential_ids",
+        "unknown query",
+        "non-X.509 query",
+        "empty signatureRequests"
+    ).asData(nameFn = { "rejects invalid QES transaction data: $it" }) test { invalid ->
         val fixture = QesPreparationFixture()
         val data = when (invalid) {
             "missing" -> null
             "empty" -> emptyList()
             "malformed" -> listOf(JsonPrimitive("!"))
-            "unknown type" -> listOf(JsonPrimitive("""{"type":"unknown","credential_ids":["certificate"]}"""
-                .encodeToByteArray().encodeToString(Base64UrlStrict)))
-            "empty credential_ids" -> listOf(fixture.transaction.copy(credentialIds = emptySet()).toBase64UrlJsonString())
-            "unknown query" -> listOf(fixture.transaction.copy(credentialIds = setOf("unknown")).toBase64UrlJsonString())
-            "empty signatureRequests" -> listOf(fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString())
+            "unknown type" -> listOf(
+                JsonPrimitive(
+                    """{"type":"unknown","credential_ids":["certificate"]}""".encodeToByteArray()
+                        .encodeToString(Base64UrlStrict)
+                )
+            )
+
+            "empty credential_ids" -> listOf(
+                fixture.transaction.copy(credentialIds = emptySet()).toBase64UrlJsonString()
+            )
+
+            "unknown query" -> listOf(
+                fixture.transaction.copy(credentialIds = setOf("unknown")).toBase64UrlJsonString()
+            )
+
+            "empty signatureRequests" -> listOf(
+                fixture.transaction.copy(signatureRequests = emptyList()).toBase64UrlJsonString()
+            )
+
             else -> fixture.parameters.transactionData
         }
         val request = fixture.parameters.copy(
@@ -303,7 +387,8 @@ val OpenId4VpQesRequestTest by matrixSuite {
                 """{"credentials":[{"id":"certificate","format":"dc+sd-jwt","meta":{"vct_values":["https://example.test/pid"]}}]}"""
             ) else fixture.parameters.dcqlQuery,
         )
-        fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull().shouldBeInstanceOf<InvalidTransactionData>()
+        fixture.holder.startAuthorizationResponsePreparation(fixture.sign(request)).exceptionOrNull()
+            .shouldBeInstanceOf<InvalidTransactionData>()
     }
 }
 
@@ -315,10 +400,12 @@ private class QesPreparationFixture {
     val holder = OpenId4VpHolder(relyingPartyTrust = trust)
     val transaction = QesRequest(
         credentialIds = setOf("certificate"),
-        signatureRequests = listOf(QesSignatureRequest(
-            document = DocumentReference(label = "Contract", href = "https://rp.example/contract.pdf"),
-            signatureQualifier = SignatureQualifier.EU_EIDAS_QES,
-        )),
+        signatureRequests = listOf(
+            QesSignatureRequest(
+                document = DocumentReference(label = "Contract", href = "https://rp.example/contract.pdf"),
+                signatureQualifier = SignatureQualifier.EU_EIDAS_QES,
+            )
+        ),
     )
     val parameters = AuthenticationRequestParameters(
         responseType = OpenIdConstants.VP_TOKEN,
@@ -349,7 +436,11 @@ private class QesPreparationFixture {
         parameters.append("client_id", clientId)
         if (request != null) parameters.append("request", request)
         else parameters.append("request_uri", REQUEST_URI)
-        method?.let { parameters.append("request_uri_method", if (it == JarRequestParameters.RequestUriMethod.POST) "post" else "get") }
+        method?.let {
+            parameters.append(
+                "request_uri_method", if (it == JarRequestParameters.RequestUriMethod.POST) "post" else "get"
+            )
+        }
     }.buildString()
 
     companion object {

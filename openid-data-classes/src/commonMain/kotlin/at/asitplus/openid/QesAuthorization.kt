@@ -9,11 +9,15 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * D3.1: UC Specification WP3:
- * Transaction data entry used to authorize a qualified electronic signature
+ * Legacy D3.1: UC Specification WP3 transaction data, retained for compatibility.
+ * For current CSC flows, use [QesRequest] for signing or [QesApprovalRequest] for approval transactions.
  */
 @Serializable
 @SerialName("qes_authorization")
+@Deprecated(
+    "Legacy D3.1/WP3 transaction data; use QesRequest for signing or QesApprovalRequest for approval transactions",
+    level = DeprecationLevel.WARNING,
+)
 data class QesAuthorization(
     /**
      * CSC: OPTIONAL.
@@ -89,6 +93,10 @@ data class QesAuthorization(
         /**
          * Safe way to construct the object as init throws
          */
+        @Deprecated(
+            "Legacy D3.1/WP3 transaction data; use QesRequest for signing or QesApprovalRequest for approval transactions",
+            level = DeprecationLevel.WARNING,
+        )
         fun create(
             documentDigest: List<RqesDocumentDigestEntry>,
             signatureQualifier: SignatureQualifier? = null,

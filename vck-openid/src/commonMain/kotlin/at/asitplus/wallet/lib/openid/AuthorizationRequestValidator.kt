@@ -59,14 +59,10 @@ internal class AuthorizationRequestValidator(
             }
         } ?: throw InvalidRequest("response_type is null")
 
-        // Decode once to identify the profile; transaction semantics are checked after RP authentication.
-        val transactionData = request.parameters.decodeTransactionData()
-        val qesTransactions = transactionData.orEmpty().filterIsInstance<QesRequest>()
         val signingQueryIds = request.parameters.dcqlQuery?.credentials?.filterIsInstance<DCQLX509CredentialQuery>()
             ?.map { it.id.string }?.toSet().orEmpty()
-        // An X.509 query also identifies Annex A when its required QES transaction data is missing.
-        val isQesRequest = qesTransactions.isNotEmpty() || signingQueryIds.isNotEmpty()
-        if (isQesRequest) request.requireQesAuthentication()
+        // X.509 queries identify Annex A without decoding untrusted transaction data.
+        if (signingQueryIds.isNotEmpty()) request.requireQesAuthentication()
 
         if (request.parameters.responseMode.isAnyDcApi()) {
             request.validateDcApi()
@@ -89,6 +85,11 @@ internal class AuthorizationRequestValidator(
                 configured = "custom trust source for client identifier scheme ${clientIdScheme.stringRepresentation}"
             ) { it.evaluate(request) }
         }
+        val transactionData = request.parameters.decodeTransactionData()
+        val qesTransactions = transactionData.orEmpty().filterIsInstance<QesRequest>()
+        // Still enforce QES requirements when a qesRequest omits the required X.509 queries.
+        if (signingQueryIds.isEmpty() && qesTransactions.isNotEmpty()) request.requireQesAuthentication()
+        val isQesRequest = signingQueryIds.isNotEmpty() || qesTransactions.isNotEmpty()
         request.parameters.validateTransactionData(transactionData)
         if (isQesRequest) request.parameters.validateQesRequest(qesTransactions, signingQueryIds)
     }
@@ -155,7 +156,7 @@ internal class AuthorizationRequestValidator(
         }
     }
 
-    /** Decode enough to identify the profile, preserving the protocol error for malformed transaction data. */
+    /** Decode after the RP checks, preserving the protocol error for malformed transaction data. */
     private fun AuthenticationRequestParameters.decodeTransactionData(): List<TransactionData>? =
         catchingUnwrapped { transactionDataDecoded }
             .getOrElse { throw InvalidTransactionData("Invalid transaction_data", it) }

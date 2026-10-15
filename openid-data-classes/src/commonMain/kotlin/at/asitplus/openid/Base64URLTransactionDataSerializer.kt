@@ -13,8 +13,8 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
 /**
- * According to "Transaction Data entries as defined in D3.1: UC Specification WP3" the encoding
- * is JSON and every entry is serialized to a base64 encoded string
+ * Encodes each OpenID4VP [TransactionData] entry as a base64url-encoded JSON string.
+ * Supports current CSC transaction types and legacy D3.1/WP3 transaction data.
  */
 object Base64URLTransactionDataSerializer : KSerializer<TransactionData> {
 
