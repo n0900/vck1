@@ -263,7 +263,7 @@ val CredentialTrustTest by matrixSuite {
             anchors.resolve(MDL_DOCTYPE, TrustPurpose.ISSUANCE).shouldBeNull()
         }
 
-        "the legacy adapter uses the same anchors for every type" {
+        "the legacysignum adapter uses the same anchors for every type" {
             val ca = TestCertificateAuthority()
             val anchors = CredentialTrustAnchors.sameForAllTypes(
                 issuance = { setOf(ca.certificate) },

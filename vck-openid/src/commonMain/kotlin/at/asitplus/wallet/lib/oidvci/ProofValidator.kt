@@ -355,7 +355,7 @@ private fun ValidationReport.rejection(): OAuth2Exception {
     return cause as? OAuth2Exception ?: InvalidProof(cause.message, cause)
 }
 
-/** The first rejection of a key attestation, with the messages the legacy validator used. */
+/** The first rejection of a key attestation, with the messages the legacysignum validator used. */
 private fun ValidationReport.keyAttestationRejection(): CheckOutcome {
     if (decision == ValidationDecision.ACCEPTED) return Passed
     val checks = checks as KeyAttestationChecks

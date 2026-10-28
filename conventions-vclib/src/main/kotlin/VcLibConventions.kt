@@ -163,7 +163,7 @@ fun KotlinMultiplatformExtension.vckAndroid(minSdkOverride: Int? = null) {
 fun Project.hasAndroidSdk() = resolveAndroidSdk(this)?.let { it -> isValidAndroidSdk(it) } == true
 
 private fun resolveAndroidSdk(project: Project): File? {
-    // Highest precedence: ANDROID_SDK_ROOT (preferred), then ANDROID_HOME (legacy)
+    // Highest precedence: ANDROID_SDK_ROOT (preferred), then ANDROID_HOME (legacysignum)
     val env = System.getenv()
     val fromEnv = listOf("ANDROID_SDK_ROOT", "ANDROID_HOME")
         .asSequence()

@@ -67,7 +67,7 @@ val OpenId4VpRequestValidationReportTest by matrixSuite {
             }
             preparationState.request.parameters.clientId.shouldNotBeNull()
         }
-        // The legacy method does not evaluate trust without relyingPartyTrust, as before
+        // The legacysignum method does not evaluate trust without relyingPartyTrust, as before
         holder.startAuthorizationResponsePreparation(relyingParty.request()).getOrThrow()
     }
 
@@ -81,7 +81,7 @@ val OpenId4VpRequestValidationReportTest by matrixSuite {
             requestChecks().timeliness.shouldBeInstanceOf<CheckOutcome.Failed>()
                 .throwable.shouldBeInstanceOf<TimelinessException>()
         }
-        // The legacy method has never checked exp
+        // The legacysignum method has never checked exp
         holder.startAuthorizationResponsePreparation(relyingParty.request(claims = expiredClaims())).getOrThrow()
     }
 
@@ -109,7 +109,7 @@ val OpenId4VpRequestValidationReportTest by matrixSuite {
             children.single().checks.shouldBeInstanceOf<RelyingPartyChecks>().requestData
                 .shouldBeInstanceOf<CheckOutcome.Failed>()
         }
-        // The legacy method has never validated registration certificates
+        // The legacysignum method has never validated registration certificates
         holder.startAuthorizationResponsePreparation(relyingParty.request(claims = mapOf("verifier_info" to
                 """[{"format":"registration_cert","data":"not-a-jws"}]"""))).getOrThrow()
     }

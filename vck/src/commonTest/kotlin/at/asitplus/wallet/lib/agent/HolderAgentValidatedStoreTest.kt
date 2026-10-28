@@ -64,7 +64,7 @@ val HolderAgentValidatedStoreTest by matrixSuite {
                         .shouldBeInstanceOf<CheckOutcome.Failed>()
                 }
 
-                "the legacy store fails with the cause of the rejection, and stores nothing" {
+                "the legacysignum store fails with the cause of the rejection, and stores nothing" {
                     val issuance = issuance()
                     val untrusted = HolderAgent(issuance.holderKey, credentialValidator = issuance().validator())
 
@@ -73,7 +73,7 @@ val HolderAgentValidatedStoreTest by matrixSuite {
                     untrusted.getCredentials().shouldNotBeNull().shouldBeEmpty()
                 }
 
-                "the legacy store without trust configured checks integrity only, as before" {
+                "the legacysignum store without trust configured checks integrity only, as before" {
                     val issuance = issuance()
                     val holder = HolderAgent(issuance.holderKey)
 

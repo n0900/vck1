@@ -1,6 +1,6 @@
 @file:UseSerializers(ByteArrayBase64Serializer::class)
 
-package at.asitplus.legacy
+package at.asitplus.legacysignum
 
 import at.asitplus.catching
 import at.asitplus.signum.indispensable.io.ByteArrayBase64Serializer

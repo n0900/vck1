@@ -94,7 +94,7 @@ private fun parseIssued(compact: String): ParsedSdJwt {
     require(disclosures.none { it.isEmpty() }) { "An SD-JWT contains no empty disclosure" }
     val jws = JwsCompact(parts.first())
     val type = jws.jwsHeader.type
-    // The legacy vc+sd-jwt is rejected (draft-ietf-oauth-sd-jwt-vc-19, 2.2.1: "typ value MUST use dc+sd-jwt")
+    // The legacysignum vc+sd-jwt is rejected (draft-ietf-oauth-sd-jwt-vc-19, 2.2.1: "typ value MUST use dc+sd-jwt")
     require(type.equals(JwsContentTypeConstants.SD_JWT, ignoreCase = true)) { "Invalid type of SD-JWT VC: $type" }
     val signedPayload = jws.getPayload<JsonObject>().getOrThrow()
     val credential = jws.getPayload<VerifiableCredentialSdJwt>().getOrThrow()

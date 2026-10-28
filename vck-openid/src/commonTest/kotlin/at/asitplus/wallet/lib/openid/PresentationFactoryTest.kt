@@ -118,7 +118,7 @@ val PresentationFactoryTest by matrixSuite {
             ) shouldBe false
         }
 
-        "fully-specified COSE algorithm matches its legacy equivalent" {
+        "fully-specified COSE algorithm matches its legacysignum equivalent" {
             VpFormatsSupported(
                 msoMdoc = SupportedAlgorithmsContainerIso(
                     issuerAuthAlgorithmInts = setOf(CoseAlgorithm.Signature.ESP256.coseValue),

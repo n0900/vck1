@@ -355,7 +355,7 @@ internal class VpTokenValidator(
 }
 
 /**
- * The validation of a `vp_token`: the [result] of the legacy verifier, and the [report] of the response, which every
+ * The validation of a `vp_token`: the [result] of the legacysignum verifier, and the [report] of the response, which every
  * presentation of it is validated for with a [CredentialValidator].
  */
 internal class VpTokenValidation(

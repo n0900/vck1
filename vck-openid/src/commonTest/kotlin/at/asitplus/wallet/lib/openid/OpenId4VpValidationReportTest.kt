@@ -54,7 +54,7 @@ val OpenId4VpValidationReportTest by matrixSuite {
                         .shouldBeSingleton().first().presentation.shouldNotBeNull()
                 }
 
-                "rejects a revoked credential, while the legacy result reports it as not fresh" {
+                "rejects a revoked credential, while the legacysignum result reports it as not fresh" {
                     val issuance = trustedIssuance()
                     val result = issuance.present(representation, issuance.verifier(issuance.validator())) {
                         issuance.revoke(it)

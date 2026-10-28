@@ -1,4 +1,4 @@
-package at.asitplus.legacy
+package at.asitplus.legacysignum
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

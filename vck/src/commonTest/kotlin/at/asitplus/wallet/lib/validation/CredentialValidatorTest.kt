@@ -272,7 +272,7 @@ val CredentialValidatorTest by matrixSuite {
             issuance.validateSdJwt(issued.serialize() + kb).checks.parsing.shouldBeInstanceOf<Failed>()
         }
 
-        "the legacy type vc+sd-jwt fails parsing" {
+        "the legacysignum type vc+sd-jwt fails parsing" {
             val issuance = issuance()
             val issued = issuance.sdJwt().signedSdJwtVc
             val legacy = issued.jws.patchHeader { put("typ", JsonPrimitive("vc+sd-jwt")) }
